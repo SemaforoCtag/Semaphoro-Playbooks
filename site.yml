@@ -1,0 +1,33 @@
+---
+- name: Escanear varias redes usando nmap
+  hosts: localhost
+  gather_facts: no
+  vars:
+    redes:
+      - "10.1.3.0/24"
+      - "10.2.3.0/24"
+      - "10.17.3.0/24"
+      - "10.18.3.0/24"
+      - "10.49.3.0/24"
+      - "10.19.3.0/24"
+      - "10.20.3.0/24"
+      - "10.4.3.0/24"
+      - "10.33.3.0/24"
+      - "10.1.53.0/24"
+      - "10.25.3.0/24"
+  tasks:
+    - name: Ejecutar nmap para escaneo ICMP en cada red
+      command: "nmap -sn {{ item }}"
+      loop: "{{ redes }}"
+      register: scan_results
+
+    - name: Consolidar todos los equipos encontrados en una lista
+      set_fact:
+        all_hosts: "{{ all_hosts | default([]) + [ 'La red ' + item.item + ' tiene los siguientes equipos:' ] + (item.stdout | regex_findall('Nmap scan report for ([^\\n]+)')) }}"
+      loop: "{{ scan_results.results }}"
+
+    - name: Mostrar la lista de todos los hosts encontrados en todas las redes
+      debug:
+        msg:
+          - "Los equipos encontrados son:"
+          - "{{ all_hosts }}"
