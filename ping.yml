@@ -1,1 +1,34 @@
+---
+- hosts: 10.1.100.37
+  gather_facts: yes
+  tasks:
+#    - name: Obtener información de los equipos en la red
+#      debug:
+#       msg: "{{ ansible_facts }}"
 
+    - name: Obtener SO
+      debug:
+        msg: "{{ ansible_facts.distribution }}"
+
+    - name: Procesador
+      debug:
+        msg: "{{ ansible_facts.processor[2] }}"
+
+    - name: RAM
+      debug:
+        msg: "{{ ansible_facts.memtotal_mb }}"
+
+    - name: Nombre Equipo
+      set_fact:
+       computerName: "{{ ansible_facts.hostname }}"
+
+    - name: IP
+      set_fact:
+       ip: "{{ ansible_facts.default_ipv4.address }}"
+
+    - name: MAC
+      set_fact:
+       mac: "{{ ansible_facts.default_ipv4.macaddress }}"
+    - name: Mostrar info
+      debug:
+       msg: "{{computerName}};{{ip}};{{mac}}"
