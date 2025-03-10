@@ -1,0 +1,31 @@
+---
+- name: Desplegar e instalar Wazuh Agent
+  hosts: all
+  become: yes
+  vars:
+    wazuh_agent_version: "4.9.2-1"
+    wazuh_agent_deb: "wazuh-agent_{{ wazuh_agent_version }}_amd64.deb"
+    wazuh_download_url: "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/{{ wazuh_agent_deb }}"
+    wazuh_manager: "wz.ctag.com"
+    wazuh_registration_password: "FP@fsfQ2PeUGq90DWsr89"
+
+  tasks:
+    - name: Descargar el paquete Wazuh Agent
+      get_url:
+        url: "{{ wazuh_download_url }}"
+        dest: "/tmp/{{ wazuh_agent_deb }}"
+        mode: '0644'
+
+    - name: Instalar el paquete Wazuh Agent
+      environment:
+        WAZUH_MANAGER: "{{ wazuh_manager }}"
+        WAZUH_REGISTRATION_PASSWORD: "{{ wazuh_registration_password }}"
+      apt:
+        deb: "/tmp/{{ wazuh_agent_deb }}"
+        state: present
+
+    - name: Habilitar y arrancar el servicio Wazuh Agent
+      systemd:
+        name: wazuh-agent
+        enabled: yes
+        state: started
