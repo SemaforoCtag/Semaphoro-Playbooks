@@ -1,5 +1,5 @@
 ---
-- hosts: 10.1.100.37
+- hosts: 10.1.100.37 #aqui se pone el equipo al que se quiere hacer el ping
   gather_facts: yes
   tasks:
 #    - name: Obtener información de los equipos en la red
