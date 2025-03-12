@@ -1,0 +1,48 @@
+---
+- name: Obtener información del equipo Windows
+  hosts: all
+  gather_facts: no  # Desactivamos gather_facts para evitar errores con Windows
+  tasks:
+
+    - name: Verificar conexión con el equipo Windows
+      win_ping:
+
+    - name: Obtener versión de Windows
+      win_shell: systeminfo | findstr /B /C:"OS Name" /C:"OS Version"
+      register: windows_version
+
+    - name: Mostrar versión de Windows
+      debug:
+        msg: "{{ windows_version.stdout_lines }}"
+
+    - name: Obtener nombre del equipo
+      win_hostname:
+      register: windows_hostname
+
+    - name: Mostrar nombre del equipo
+      debug:
+        msg: "Nombre del equipo: {{ windows_hostname.hostname }}"
+
+    - name: Obtener dirección IP
+      win_shell: ipconfig | findstr IPv4
+      register: ip_address
+
+    - name: Mostrar dirección IP
+      debug:
+        msg: "{{ ip_address.stdout_lines }}"
+
+    - name: Obtener cantidad de RAM (MB)
+      win_shell: wmic OS get TotalVisibleMemorySize /Value
+      register: ram_total
+
+    - name: Mostrar cantidad de RAM
+      debug:
+        msg: "{{ ram_total.stdout_lines }}"
+
+    - name: Obtener procesador
+      win_shell: wmic cpu get Name
+      register: cpu_info
+
+    - name: Mostrar procesador
+      debug:
+        msg: "{{ cpu_info.stdout_lines }}"
