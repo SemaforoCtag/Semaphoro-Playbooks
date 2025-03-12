@@ -1,6 +1,6 @@
 ---
 - name: Obtener información del equipo Windows
-  hosts: all
+  hosts: 10.1.100.37
   gather_facts: no  # Desactivamos gather_facts para evitar errores con Windows
   tasks:
 
