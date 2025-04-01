@@ -10,7 +10,7 @@
       ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDK0PLkz3R9AThs1q3UJanj2uxcC359ft64kuXfHMCrMk+2Dkl8llQQXfEicZsxLwn/2iPN6AGzp7jeCEEv14kFrhTCTnSwUYyQN96rc/KTIoaiRAMEc5cVyVPlrXtq1euXuDiug2vTvVYoi5fJivc6BvJXumHRb0IRBwzcztra2NZoiVLS64wd6Cuom8NYOxGCAu8tjynXjL5cyYU5tHvk2Y8qyVR5HjXSfA8eqHTj56mGu8Dm1W1J4JIK5SHg9T4dBhwvK+4Bz3BQ65iISjawChl56yO/t4PEecYXMclMY9AdABhrTwy7cDxq9yxG+5UFjPjnM6CzkQdNd363hxI1I1sMc8oYisIE9shTkawfvFhoXS10g92MxtOQtrtyc6jsWcLhVkyzuKWLasIHTHq11/QwkmGv6t5daPk7uIxzvjags+121+5lQ6CxWfsfo3CmV5NYii6rfLedwWAiHOm1fHgwQMLXGzjsw8XSCYOKhfx+6Rl4KaUk8dvZrmkbbTM= Ansible
 # Clave pública SSH para acceso al usuario creado
 
-   tasks:
+  tasks:
     - name: Crear usuario {{ usuario }} con home y bash
       ansible.builtin.user:
         name: "{{ usuario }}"
