@@ -1,0 +1,11 @@
+- name: Habilitar WinRM en equipos Windows vía SSH
+  hosts: all
+  gather_facts: no
+  tasks:
+    - name: Habilitar WinRM en PowerShell
+      ansible.builtin.raw: |
+        powershell.exe -ExecutionPolicy Bypass -Command "
+          Enable-PSRemoting -Force;
+          Set-Item WSMan:\localhost\Client\TrustedHosts -Value '*';
+          winrm set winrm/config/service @{AllowUnencrypted='true'};
+          winrm set winrm/config/service/auth @{Basic='true'}"
