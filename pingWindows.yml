@@ -1,4 +1,5 @@
 - hosts: all
   gather_facts: no
   tasks:
-  - action: win_ping
+    - name: Prueba de conexión a Windows
+      win_ping:
