@@ -1,6 +1,6 @@
 - name: Verificar conexión con los equipos
   hosts: localhost
-  gather_facts: no
+  gather_facts: yes
   tasks:
     - name: Prueba de respuesta de equipos con ping
       ansible.builtin.ping:
