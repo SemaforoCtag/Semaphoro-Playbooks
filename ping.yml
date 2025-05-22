@@ -10,3 +10,6 @@
       debug:
         var: resultado_ping
 
+    - name: Mostrar version del SO
+      ansible.builtin.debug:
+        msg: "La version del software es: {{ ansible_facts['ansible_distribution'] }}"
