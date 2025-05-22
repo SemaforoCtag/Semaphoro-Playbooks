@@ -1,5 +1,5 @@
 - name: Verificar conexión con los equipos
-  hosts: 10.57.3.0
+  hosts: localhost
   gather_facts: no
   tasks:
     - name: Prueba de respuesta de equipos con ping
