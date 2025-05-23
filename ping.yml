@@ -1,14 +1,48 @@
 - name: Verificar conexión con los equipos
   hosts: localhost
   gather_facts: no
-  tasks:
-    - name: Prueba de respuesta de equipos con ping
-      ansible.builtin.ping:
-      register: resultado_ping
+  vars:
+    hosts_ping:
+      - 10.57.3.7
+      - 10.57.3.10
+      - 10.57.3.12
+      - 10.57.3.15
+      - 10.57.3.16
+      - 10.57.3.21
+      - 10.57.3.23
+      - 10.57.3.27
+      - 10.57.3.28
+      - 10.57.3.29
+      - 10.57.3.32
+      - 10.57.3.33
+      - 10.57.3.34
+      - 10.57.3.35
+      - 10.57.3.36
+      - 10.57.3.37
+      - 10.57.3.38
+      - 10.57.3.41
+      - 10.57.3.42
+      - 10.57.3.44
+      - 10.57.3.46
+      - 10.57.3.53
+      - 10.57.3.54
+      - 10.57.3.55
+      - 10.57.3.56
+      - 10.57.3.57
+      - 10.57.3.58
+      - 10.57.3.59
+      - 10.57.3.60
 
-    - name: Mostrar resultado del ping
+  tasks:
+    - name: Hacer ping a {{ item }}
+      ansible.builtin.command: ping -c 1 -W 1 {{ item }}
+      loop: "{{ hosts_ping }}"
+      register: resultados
+
+    - name: Mostrar resultados
       debug:
-        var: resultado_ping
+        msg: "{{ item.item }} → {{ 'OK' if item.rc == 0 else 'FALLO' }}"
+      loop: "{{ resultados.results }}"
 
     - name: Recolectar informacion del sistema
       ansible.builtin.setup:
