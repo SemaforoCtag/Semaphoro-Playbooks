@@ -1,14 +1,19 @@
 ---
-- name: Obtener información detallada del equipo
+- name: Obtener información detallada del equipo y generar Excel
   hosts: all
   gather_facts: yes
   become: true
+
+  vars:
+    ruta_json: "/tmp/info_{{ inventory_hostname }}.json"
+    ruta_excel: "/home/userti/Documentos/Inventario_Equipos_DMZ.xlsx"
+    script_python: "/tmp/generar_excel.py"
 
   tasks:
 
     - name: Mostrar el nombre del equipo (hostname)
       debug:
-        msg: "Nombre del equipo: {{ ansible_hostname}} "
+        msg: "Nombre del equipo: {{ ansible_hostname }}"
 
     - name: Mostrar información del sistema operativo
       debug:
@@ -35,9 +40,9 @@
           Disco {{ device }} - Tamaño: {{ data.size }}
           {% endfor %}
 
-    - name: Deteccion de maquina fisica o virtual
+    - name: Detección de máquina física o virtual
       debug:
-        msg:  >-
+        msg: >-
           {% if ansible_virtualization_role == 'guest' %}
             Es una MÁQUINA VIRTUAL ({{ ansible_virtualization_type }}).
           {% elif ansible_virtualization_role == 'host' %}
@@ -45,3 +50,25 @@
           {% else %}
             Es un EQUIPO FÍSICO (sin virtualización detectable).
           {% endif %}
+
+    - name: Guardar datos del sistema en JSON
+      copy:
+        content: "{{ ansible_facts | to_nice_json }}"
+        dest: "{{ ruta_json }}"
+
+    - name: Copiar script Python que genera el Excel
+      copy:
+        src: "./generar_excel.py"
+        dest: "{{ script_python }}"
+        mode: '0755'
+
+    - name: Generar Excel con la información recolectada
+      command: "python3 {{ script_python }} {{ ruta_excel }} /tmp/info_*.json"
+      run_once: true
+
+    - name: Copiar Excel al equipo local
+      fetch:
+        src: "{{ ruta_excel }}"
+        dest: "./inventario_resultado.xlsx"
+        flat: true
+      run_once: true
