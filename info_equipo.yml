@@ -34,3 +34,14 @@
           {% for device, data in ansible_devices.items() if device.startswith('sd') or device.startswith('nvme') %}
           Disco {{ device }} - Tamaño: {{ data.size }}
           {% endfor %}
+
+    - name: Deteccion de maquina fisica o virtual
+      debug:
+        msg:  >-
+          {% if ansible_virtualization_role == 'guest' %}
+            Es una MÁQUINA VIRTUAL ({{ ansible_virtualization_type }}).
+          {% elif ansible_virtualization_role == 'host' %}
+            Es un HOST de virtualización ({{ ansible_virtualization_type }}).
+          {% else %}
+            Es un EQUIPO FÍSICO (sin virtualización detectable).
+          {% endif %}
