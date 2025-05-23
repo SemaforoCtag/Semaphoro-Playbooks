@@ -69,6 +69,6 @@
     - name: Copiar Excel al equipo local
       fetch:
         src: "{{ ruta_excel }}"
-        dest: "./inventario_resultado.xlsx"
+        dest: "/home/userti/Documentos/Inventario_Equipos_DMZ.xlsx"
         flat: true
       run_once: true
