@@ -1,19 +1,52 @@
-- name: Escanear red completa y detectar hosts activos
+- name: Verificar conexión con los equipos
   hosts: localhost
   gather_facts: no
   vars:
-    red: "10.57.3.0/24"  # Ajusta esto a tu red
+    hosts_ping:
+      - 10.57.3.7
+      - 10.57.3.10
+      - 10.57.3.12
+      - 10.57.3.15
+      - 10.57.3.16
+      - 10.57.3.21
+      - 10.57.3.23
+      - 10.57.3.27
+      - 10.57.3.28
+      - 10.57.3.29
+      - 10.57.3.32
+      - 10.57.3.33
+      - 10.57.3.34
+      - 10.57.3.35
+      - 10.57.3.36
+      - 10.57.3.37
+      - 10.57.3.38
+      - 10.57.3.41
+      - 10.57.3.42
+      - 10.57.3.44
+      - 10.57.3.46
+      - 10.57.3.53
+      - 10.57.3.54
+      - 10.57.3.55
+      - 10.57.3.56
+      - 10.57.3.57
+      - 10.57.3.58
+      - 10.57.3.59
+      - 10.57.3.60
+
   tasks:
-    - name: Ejecutar escaneo ICMP con nmap
-      ansible.builtin.command: nmap -sn {{ red }}
-      register: resultado_escaneo
-      changed_when: false
+    - name: Hacer ping ICMP a {{ item }}
+      ansible.builtin.command: ping -c 1 -W 1 {{ item }}
+      loop: "{{ hosts_ping }}"
+      register: resultados
 
-    - name: Extraer IPs activas de salida de nmap
-      set_fact:
-        ips_activas: "{{ resultado_escaneo.stdout_lines | select('match', '^Nmap scan report for ') | map('regex_replace', '^Nmap scan report for ', '') | list }}"
-
-    - name: Mostrar IPs que responden al ping
+    - name: Mostrar IPs activas
       debug:
-        msg: "{{ item }}"
-      loop: "{{ ips_activas }}"
+        msg: "{{ item.item }} responde correctamente"
+      loop: "{{ resultados.results }}"
+      when: item.rc == 0
+
+    - name: Mostrar IPs inactivas
+      debug:
+        msg: "{{ item.item }} no responde"
+      loop: "{{ resultados.results }}"
+      when: item.rc != 0
