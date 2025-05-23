@@ -51,6 +51,12 @@
             Es un EQUIPO FÍSICO (sin virtualización detectable).
           {% endif %}
 
+    - name: Instalar pandas si no está instalado
+      ansible.builtin.apt:
+        name: python3-pandas
+        state: present
+        update_cache: yes
+
     - name: Guardar datos del sistema en JSON
       copy:
         content: "{{ ansible_facts | to_nice_json }}"
@@ -65,7 +71,7 @@
     - name: Generar Excel con la información recolectada
       command: "python3 {{ script_python }} {{ ruta_excel }} /tmp/info_*.json"
       run_once: true
-
+    
     - name: Copiar Excel al equipo local
       fetch:
         src: "{{ ruta_excel }}"
