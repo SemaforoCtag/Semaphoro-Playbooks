@@ -6,6 +6,10 @@
 
   tasks:
 
+    - name: Mostrar el nombre del equipo (hostname)
+      debug:
+        msg: "Nombre del equipo: {{ ansible_hostname}} "
+
     - name: Mostrar información del sistema operativo
       debug:
         msg:
