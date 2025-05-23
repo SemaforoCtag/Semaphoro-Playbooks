@@ -39,14 +39,15 @@
       loop: "{{ hosts_ping }}"
       register: resultados
 
-    - name: Mostrar resultados
+    - name: Mostrar resultados de ping
       debug:
         msg: "{{ item.item }} → {{ 'OK' if item.rc == 0 else 'FALLO' }}"
       loop: "{{ resultados.results }}"
 
-    - name: Recolectar informacion del sistema
+    - name: Recolectar información del sistema local
       ansible.builtin.setup:
+      register: system_info
 
-    - name: Mostrar version del SO
-      ansible.builtin.debug:
-        msg: "La version del software es: {{ ansible_distribution }}"
+    - name: Mostrar versión del SO local
+      debug:
+        msg: "La versión del sistema operativo es: {{ system_info.ansible_facts['ansible_distribution'] }}"
