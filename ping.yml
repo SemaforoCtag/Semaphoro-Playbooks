@@ -1,6 +1,6 @@
 - name: Verificar conexión con los equipos
   hosts: localhost
-  gather_facts: yes
+  gather_facts: no
   tasks:
     - name: Prueba de respuesta de equipos con ping
       ansible.builtin.ping:
@@ -10,6 +10,9 @@
       debug:
         var: resultado_ping
 
+    - name: Recolectar informacion del sistema
+      ansible.builtin.setup:
+
     - name: Mostrar version del SO
       ansible.builtin.debug:
-        msg: "La version del software es: {{ ansible_facts['ansible_distribution'] }}"
+        msg: "La version del software es: {{ ansible_distribution }}"
