@@ -1,0 +1,32 @@
+---
+- name: Obtener información detallada del equipo
+  hosts: all
+  gather_facts: yes
+  become: true
+
+  tasks:
+
+    - name: Mostrar información del sistema operativo
+      debug:
+        msg:
+          - "Sistema operativo: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Arquitectura: {{ ansible_architecture }}"
+
+    - name: Mostrar información de la CPU
+      debug:
+        msg:
+          - "Modelo CPU: {{ ansible_processor[2] | default(ansible_processor[-1]) }}"
+          - "Número de núcleos (físicos): {{ ansible_processor_cores }}"
+          - "Número total de procesadores lógicos: {{ ansible_processor_count }}"
+
+    - name: Mostrar memoria RAM total
+      debug:
+        msg: "Memoria RAM: {{ (ansible_memtotal_mb | int / 1024) | round(2) }} GB"
+
+    - name: Mostrar información del disco
+      debug:
+        msg: >-
+          {% for device, data in ansible_devices.items() if device.startswith('sd') or device.startswith('nvme') %}
+          Disco {{ device }} - Tamaño: {{ data.size }}
+          {% endfor %}
