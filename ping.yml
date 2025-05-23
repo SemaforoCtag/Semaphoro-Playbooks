@@ -36,17 +36,18 @@
   tasks:
     - name: Hacer ping ICMP a {{ item }}
       ansible.builtin.command: ping -c 1 -W 1 {{ item }}
-      loop: "{{ hosts_ping }}"
       register: resultados
+      loop: "{{ hosts_ping }}"
+      ignore_errors: true
 
     - name: Mostrar IPs activas
       debug:
         msg: "{{ item.item }} responde correctamente"
-      loop: "{{ resultados.results }}"
       when: item.rc == 0
+      loop: "{{ resultados.results }}"
 
     - name: Mostrar IPs inactivas
       debug:
         msg: "{{ item.item }} no responde"
-      loop: "{{ resultados.results }}"
       when: item.rc != 0
+      loop: "{{ resultados.results }}"
