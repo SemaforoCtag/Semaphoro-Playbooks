@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import sys, json, glob, pandas as pd, re
+import sys, json, glob,math, pandas as pd, re
 from datetime import datetime
 
 # ---------- utilidades ----------
@@ -46,9 +46,9 @@ def fila(facts, host_inv):
     if isinstance(mem_free_mb, dict):
         mem_free_mb = mem_free_mb.get("real", {}).get("free", 0)
 
-    mem_total_gb = round(mem_total_mb / 1024, 2)
-    mem_free_gb  = round(mem_free_mb  / 1024, 2)
-    mem_used_gb  = round(mem_total_gb - mem_free_gb, 2)
+    mem_total_gb = math.ceil(mem_total_mb / 1024)
+    mem_free_gb  = math.ceil(mem_free_mb  / 1024)
+    mem_used_gb  =  mem_total_gb - mem_free_gb
 
     # ---------- DISCO ----------
     # 1. Tamaño físico de los dispositivos (igual que antes)

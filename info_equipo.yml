@@ -37,8 +37,8 @@
           Kernel: "{{ ansible_kernel }}"
           Arquitectura: "{{ ansible_architecture }}"
           CPU: "{{ ansible_processor[2] | default(ansible_processor[-1]) }}"
-          RAM_Total_GB: "{{ (ansible_memtotal_mb | int / 1024) | round(2) }}"
-          RAM_Libre_GB: "{{ (ansible_memfree_mb  | int / 1024) | round(2) }}"
+          RAM_Total_GB: "{{ (ansible_memtotal_mb | int / 1024) | round(0, 'ceil') | int }}"
+          RAM_Libre_GB: "{{ (ansible_memfree_mb  | int / 1024) | round(0, 'ceil') | int }}"
           # ---------- disco montado ----------
           Disco_Total_GB: >-
             {{
