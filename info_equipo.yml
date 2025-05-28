@@ -80,6 +80,8 @@
         path: "/home/userti/Documentos/Excels"
         state: directory
         mode: '0777'
+      delegate_to: localhost
+      become: false
       run_once: true
 
     - name: Copiar Excel al equipo local (Semaphore)
