@@ -17,15 +17,16 @@ def main():
     for json_path in glob.glob(json_glob):
         with open(json_path, 'r') as f:
             info = json.load(f)
+            facts = info.get('ansible_facts', {})
             datos.append({
                 'IP': info.get('inventory_hostname', 'desconocido'),
-                'Hostname': info.get('ansible_hostname'),
-                'SO': f"{info.get('ansible_distribution')} {info.get('ansible_distribution_version')}",
-                'Kernel': info.get('ansible_kernel'),
-                'Arquitectura': info.get('ansible_architecture'),
-                'CPU': info.get('ansible_processor', [''])[2] if len(info.get('ansible_processor', [])) > 2 else '',
-                'RAM (GB)': round(info.get('ansible_memtotal_mb', 0) / 1024, 2),
-                'Virtual': info.get('ansible_virtualization_type') if info.get('ansible_virtualization_role') == 'guest' else 'Físico'
+                'Hostname': facts.get('ansible_hostname'),
+                'SO': f"{facts.get('ansible_distribution', '')} {facts.get('ansible_distribution_version', '')}",
+                'Kernel': facts.get('ansible_kernel'),
+                'Arquitectura': facts.get('ansible_architecture'),
+                'CPU': facts.get('ansible_processor', [''])[2] if len(facts.get('ansible_processor', [])) > 2 else '',
+                'RAM (GB)': round(facts.get('ansible_memtotal_mb', 0) / 1024, 2),
+                'Virtual': facts.get('ansible_virtualization_type') if facts.get('ansible_virtualization_role') == 'guest' else 'Físico'
             })
 
     df = pd.DataFrame(datos)
