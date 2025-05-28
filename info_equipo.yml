@@ -6,8 +6,8 @@
 
   vars:
     ruta_json: "/tmp/info_{{ inventory_hostname }}.json"
-    ruta_excel: "/home/userti/Documentos/Inventario_Equipos_DMZ.xlsx"
     script_python: "/tmp/generar_excel.py"
+    ruta_excel: "/tmp/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
 
@@ -53,7 +53,7 @@
 
     - name: Guardar datos del sistema en JSON
       copy:
-        content: "{{ ansible_facts | to_nice_json }}"
+        content: "{{ ansible_facts | combine({'inventory_hostname': inventory_hostname}) | to_nice_json }}"
         dest: "{{ ruta_json }}"
 
     - name: Copiar script Python que genera el Excel
@@ -62,17 +62,19 @@
         dest: "{{ script_python }}"
         mode: '0755'
 
-    - name: Instalar pandas si no está instalado
+    - name: Instalar pandas y openpyxl si no están instalados
       ansible.builtin.apt:
-        name: python3-pandas
+        name:
+          - python3-pandas
+          - python3-openpyxl
         state: present
         update_cache: yes
 
-    - name: Generar Excel con la información recolectada
+    - name: Generar Excel con todos los JSON ordenados por IP
       command: "python3 {{ script_python }} {{ ruta_excel }} /tmp/info_*.json"
       run_once: true
 
-    - name: Copiar Excel al equipo local
+    - name: Copiar Excel al equipo local (Semaphore)
       fetch:
         src: "{{ ruta_excel }}"
         dest: "/home/userti/Documentos/Inventario_Equipos_DMZ.xlsx"
