@@ -97,7 +97,6 @@
         src: "./generar_excel.py"
         dest: "{{ script_python }}"
         mode: "0755"
-        checksum: "sha1"
         force: false
 
     - name: Ejecutar script para generar el Excel
