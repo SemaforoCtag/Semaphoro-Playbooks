@@ -6,8 +6,9 @@
 
   vars:
     ruta_json: "/tmp/info_{{ inventory_hostname }}.json"
+    ruta_json_local: "/home/semaphore/Excels"
     script_python: "/tmp/generar_excel.py"
-    ruta_excel: "/tmp/Inventario_Equipos_DMZ.xlsx"
+    ruta_excel: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
 
@@ -51,47 +52,48 @@
             Es un EQUIPO FÍSICO (sin virtualización detectable).
           {% endif %}
 
-    - name: Guardar datos del sistema en JSON
+    - name: Guardar datos del sistema en JSON en el cliente
       copy:
         content: "{{ ansible_facts | combine({'inventory_hostname': inventory_hostname}) | to_nice_json }}"
         dest: "{{ ruta_json }}"
 
-    - name: Verificar que el archivo JSON se ha creado
-      stat:
-        path: "{{ ruta_json }}"
-      register: json_file_status
-
-    - name: Copiar script Python que genera el Excel
-      copy:
-        src: "./generar_excel.py"
-        dest: "{{ script_python }}"
-        mode: '0755'
-
-    - name: Instalar pandas y openpyxl si no están instalados
-      ansible.builtin.apt:
-        name:
-          - python3-pandas
-          - python3-openpyxl
-        state: present
-        update_cache: yes
-
-    - name: Generar Excel con todos los JSON ordenados por IP
-      command: "python3 {{ script_python }} {{ ruta_excel }} /tmp/info_*.json"
-      run_once: true
-
-    - name: Asegurarse de que exista la carpeta local para recibir el Excel
-      local_action:
-        module: file
-        path: "/home/userti/Documentos/Excels"
-        state: directory
-        mode: '0777'
-      delegate_to: localhost
-      become: false
-      run_once: true
-
-    - name: Copiar Excel al equipo local (Semaphore)
+    - name: Copiar JSON al nodo de control (Semaphore)
       fetch:
-        src: "{{ ruta_excel }}"
-        dest: "/home/userti/Documentos/Excels/Inventario_Equipos_DMZ.xlsx"
+        src: "{{ ruta_json }}"
+        dest: "{{ ruta_json_local }}/"
         flat: true
-      run_once: true
+
+  # Esta parte se ejecuta solo una vez en el nodo de control
+    - name: Generar Excel en el nodo local con los JSON recolectados
+      hosts: localhost
+      gather_facts: no
+      tasks:
+
+      - name: Asegurarse de que exista la carpeta local para recibir el Excel
+        file:
+          path: "/home/userti/Documentos/Excels"
+          state: directory
+          mode: '0777'
+
+      - name: Copiar script Python al nodo local (Semaphore)
+        copy:
+          src: "./generar_excel.py"
+          dest: "{{ script_python }}"
+          mode: '0755'
+
+      - name: Instalar pandas y openpyxl si no están instalados (solo si es Debian/Ubuntu)
+        ansible.builtin.apt:
+          name:
+            - python3-pandas
+            - python3-openpyxl
+          state: present
+          update_cache: yes
+        become: true
+
+      - name: Ejecutar script Python para generar Excel con la información
+        command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_local }}/info_*.json"
+
+      - name: Copiar Excel generado al directorio final del usuario
+        copy:
+          src: "{{ ruta_excel }}"
+          dest: "/home/userti/Documentos/Excels/Inventario_Equipos_DMZ.xlsx"
