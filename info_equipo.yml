@@ -61,10 +61,6 @@
         path: "{{ ruta_json }}"
       register: json_file_status
 
-    - name: Mostrar resultado de creación del archivo
-      debug:
-        var: json_file_status
-
     - name: Mostrar los ansible_facts recogidos
       debug:
         var: ansible_facts
