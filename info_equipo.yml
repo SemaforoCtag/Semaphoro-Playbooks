@@ -56,6 +56,21 @@
         content: "{{ ansible_facts | combine({'inventory_hostname': inventory_hostname}) | to_nice_json }}"
         dest: "{{ ruta_json }}"
 
+    - name: Verificar que el archivo JSON se ha creado
+      stat:
+        path: "{{ ruta_json }}"
+      register: json_file_status
+
+    - name: Mostrar resultado de creación del archivo
+      debug:
+        var: json_file_status
+
+    - name: Mostrar los ansible_facts recogidos
+      debug:
+        var: ansible_facts
+      run_once: true
+
+
     - name: Copiar script Python que genera el Excel
       copy:
         src: "./generar_excel.py"
