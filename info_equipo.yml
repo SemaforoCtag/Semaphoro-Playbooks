@@ -77,6 +77,6 @@
     - name: Copiar Excel al equipo local (Semaphore)
       fetch:
         src: "{{ ruta_excel }}"
-        dest: "/home/userti/Documentos/Inventario_Equipos_DMZ.xlsx"
+        dest: "/home/userti/Documentos/Excels/Inventario_Equipos_DMZ.xlsx"
         flat: true
       run_once: true
