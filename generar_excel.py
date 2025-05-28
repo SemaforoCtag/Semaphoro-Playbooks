@@ -20,7 +20,7 @@ def main():
             info = json.load(f)
             facts = info.get('ansible_facts', {})
             datos.append({
-                'Fecha': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'Fecha y Hora': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'IP': info.get('inventory_hostname', 'desconocido'),
                 'Hostname': facts.get('ansible_hostname', ''),
                 'SO': f"{facts.get('ansible_distribution', '')} {facts.get('ansible_distribution_version', '')}",
@@ -28,7 +28,7 @@ def main():
                 'Arquitectura': facts.get('ansible_architecture', ''),
                 'CPU': facts.get('ansible_processor', [''])[2] if len(facts.get('ansible_processor', [])) > 2 else '',
                 'RAM (GB)': round(facts.get('ansible_memtotal_mb', 0) / 1024, 2),
-                'Virtual': facts.get('ansible_virtualization_type') if facts.get('ansible_virtualization_role') == 'guest' else 'Físico'
+                'Tipo de maquina': facts.get('ansible_virtualization_type') if facts.get('ansible_virtualization_role') == 'guest' else 'Físico'
             })
 
     df = pd.DataFrame(datos)
