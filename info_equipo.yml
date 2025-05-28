@@ -1,5 +1,5 @@
 ---
-- name: Obtener información detallada del equipo y generar JSONs desde cada host
+- name: Obtener información detallada del equipo y generar Excel
   hosts: all
   gather_facts: yes
   become: true
@@ -7,8 +7,11 @@
   vars:
     ruta_json: "/tmp/info_{{ inventory_hostname }}.json"
     ruta_json_local: "/home/semaphore/Excels"
+    script_python: "/tmp/generar_excel.py"
+    ruta_excel: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
+
     - name: Mostrar el nombre del equipo (hostname)
       debug:
         msg: "Nombre del equipo: {{ ansible_hostname }}"
@@ -54,25 +57,35 @@
         content: "{{ ansible_facts | combine({'inventory_hostname': inventory_hostname}) | to_nice_json }}"
         dest: "{{ ruta_json }}"
 
+    - name: Crear carpeta local en Semaphore para los JSON
+      delegate_to: localhost
+      become: true
+      file:
+        path: "{{ ruta_json_local }}"
+        state: directory
+        owner: semaphore
+        group: semaphore
+        mode: '0755'
+      run_once: true
+
     - name: Copiar JSON al nodo de control (Semaphore)
       fetch:
         src: "{{ ruta_json }}"
         dest: "{{ ruta_json_local }}/"
         flat: true
 
-# ================================================================
-
-- name: Generar Excel en el nodo de control a partir de los JSON recolectados
+- name: Generar Excel en el nodo local con los JSON recolectados
   hosts: localhost
   gather_facts: no
 
   vars:
-    script_python: "/tmp/generar_excel.py"
     ruta_json_local: "/home/semaphore/Excels"
+    script_python: "/tmp/generar_excel.py"
     ruta_excel: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
-    - name: Asegurarse de que exista la carpeta local para recibir el Excel
+
+    - name: Asegurarse de que exista la carpeta final del usuario
       file:
         path: "/home/userti/Documentos/Excels"
         state: directory
@@ -84,8 +97,8 @@
         dest: "{{ script_python }}"
         mode: '0755'
 
-    - name: Instalar pandas y openpyxl si no están instalados (solo si es Debian/Ubuntu)
-      ansible.builtin.apt:
+    - name: Instalar pandas y openpyxl si no están instalados (solo en Debian/Ubuntu)
+      apt:
         name:
           - python3-pandas
           - python3-openpyxl
@@ -93,7 +106,7 @@
         update_cache: yes
       become: true
 
-    - name: Ejecutar script Python para generar Excel con la información
+    - name: Ejecutar script Python para generar Excel
       command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_local }}/info_*.json"
 
     - name: Copiar Excel generado al directorio final del usuario
