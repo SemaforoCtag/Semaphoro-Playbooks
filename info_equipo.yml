@@ -31,30 +31,19 @@
     - name: Construir resumen para Excel
       set_fact:
         excel_summary:
-          IP: >-
-            {{ ansible_default_ipv4.address
-                 | default(inventory_hostname) }}
+          IP: "{{ ansible_default_ipv4.address | default(inventory_hostname) }}"
           Hostname: "{{ ansible_hostname }}"
           SO: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
           Kernel: "{{ ansible_kernel }}"
           Arquitectura: "{{ ansible_architecture }}"
           CPU: "{{ ansible_processor[2] | default(ansible_processor[-1]) }}"
-          RAM_GB: "{{ (ansible_memtotal_mb | int / 1024) | round(2) }}"
-          Disco_total_GB: >-
-            {{
-              ansible_devices
-                | dict2items
-                | selectattr('key','match','^(sd|nvme)')
-                | map(attribute='value.size')
-                | map('regex_replace','[^0-9.]','')
-                | map('float')
-                | sum
-                | round(2)
-            }}
+          RAM_Total_GB: "{{ (ansible_memtotal_mb | int / 1024) | round(2) }}"
+          RAM_Libre_GB: "{{ (ansible_memfree_mb  | int / 1024) | round(2) }}"
+          Disco_Total_GB: "{{ excel_disk_total_gb }}"
+          Disco_Libre_GB: "{{ excel_disk_free_gb }}"
           Tipo_maquina: >
-            {{ 'Virtual'
-                 if ansible_virtualization_role == 'guest'
-                 else 'Física' }}
+            {{ 'Virtual' if ansible_virtualization_role == 'guest' else 'Física' }}
+
 
     - name: Mostrar resumen en consola
       debug:
