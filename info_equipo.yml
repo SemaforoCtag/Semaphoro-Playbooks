@@ -59,7 +59,7 @@
 
     - name: Crear carpeta local en Semaphore para los JSON
       delegate_to: localhost
-      become: true
+      become: false
       file:
         path: "{{ ruta_json_local }}"
         state: directory
