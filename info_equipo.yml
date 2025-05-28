@@ -74,6 +74,14 @@
       command: "python3 {{ script_python }} {{ ruta_excel }} /tmp/info_*.json"
       run_once: true
 
+    - name: Asegurarse de que exista la carpeta local para recibir el Excel
+      local_action:
+        module: file
+        path: "/home/userti/Documentos/Excels"
+        state: directory
+        mode: '0777'
+      run_once: true
+
     - name: Copiar Excel al equipo local (Semaphore)
       fetch:
         src: "{{ ruta_excel }}"
