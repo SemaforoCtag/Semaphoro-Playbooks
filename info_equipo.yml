@@ -1,104 +1,118 @@
 ---
-- name: Obtener información detallada del equipo y generar Excel
+# ==============================================================
+# 1. Play sobre TODOS los hosts: recopila facts, muestra resumen
+#    y copia cada JSON al nodo de control
+# ==============================================================
+
+- name: Recopilar facts y copiarlos al controlador
   hosts: all
   gather_facts: yes
   become: true
 
   vars:
-    ruta_json: "/tmp/info_{{ inventory_hostname }}.json"
-    ruta_json_local: "/home/semaphore/Excels"
-    script_python: "/home/semaphore/Excels/generar_excel.py"
-    ruta_excel: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
+    ruta_json_ctl:    "/home/semaphore/Excels"
+
+  pre_tasks:
+    # Creamos la carpeta en el nodo de control (una sola vez)
+    - name: Crear carpeta local para los JSON
+      file:
+        path: "{{ ruta_json_ctl }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+      become: false
 
   tasks:
+    # ----------------------------------------------------------
+    # 1) RESUMEN legible en consola (lo que acabará en el Excel)
+    # ----------------------------------------------------------
+    - name: Construir resumen para Excel
+      set_fact:
+        excel_summary:
+          IP: >-
+            {{ ansible_default_ipv4.address
+                 | default(inventory_hostname) }}
+          Hostname: "{{ ansible_hostname }}"
+          SO: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
+          Kernel: "{{ ansible_kernel }}"
+          Arquitectura: "{{ ansible_architecture }}"
+          CPU: "{{ ansible_processor[2] | default(ansible_processor[-1]) }}"
+          RAM_GB: "{{ (ansible_memtotal_mb | int / 1024) | round(2) }}"
+          Disco_total_GB: >-
+            {{
+              ansible_devices
+                | dict2items
+                | selectattr('key','match','^(sd|nvme)')
+                | map(attribute='value.size')
+                | map('regex_replace','[^0-9.]','')
+                | map('float')
+                | sum
+                | round(2)
+            }}
+          Tipo_maquina: >
+            {{ 'Virtual'
+                 if ansible_virtualization_role == 'guest'
+                 else 'Física' }}
 
-    - name: Mostrar el nombre del equipo (hostname)
+    - name: Mostrar resumen en consola
       debug:
-        msg: "Nombre del equipo: {{ ansible_hostname }}"
+        var: excel_summary
 
-    - name: Mostrar información del sistema operativo
-      debug:
-        msg:
-          - "Sistema operativo: {{ ansible_distribution }} {{ ansible_distribution_version }}"
-          - "Kernel: {{ ansible_kernel }}"
-          - "Arquitectura: {{ ansible_architecture }}"
-
-    - name: Mostrar información de la CPU
-      debug:
-        msg:
-          - "Modelo CPU: {{ ansible_processor[2] | default(ansible_processor[-1]) }}"
-          - "Número de núcleos (físicos): {{ ansible_processor_cores }}"
-          - "Número total de procesadores lógicos: {{ ansible_processor_count }}"
-
-    - name: Mostrar memoria RAM total
-      debug:
-        msg: "Memoria RAM: {{ (ansible_memtotal_mb | int / 1024) | round(2) }} GB"
-
-    - name: Mostrar información del disco
-      debug:
-        msg: >-
-          {% for device, data in ansible_devices.items() if device.startswith('sd') or device.startswith('nvme') %}
-          Disco {{ device }} - Tamaño: {{ data.size }}
-          {% endfor %}
-
-    - name: Detección de máquina física o virtual
-      debug:
-        msg: >-
-          {% if ansible_virtualization_role == 'guest' %}
-            Es una MÁQUINA VIRTUAL ({{ ansible_virtualization_type }}).
-          {% elif ansible_virtualization_role == 'host' %}
-            Es un HOST de virtualización ({{ ansible_virtualization_type }}).
-          {% else %}
-            Es un EQUIPO FÍSICO (sin virtualización detectable).
-          {% endif %}
-
-    - name: Guardar datos del sistema en JSON en el cliente
+    # ----------------------------------------------------------
+    # 2) Guardar los facts en JSON (incluye inventory_hostname)
+    # ----------------------------------------------------------
+    - name: Guardar facts del sistema en JSON en el host
       copy:
-        content: "{{ ansible_facts | combine({'inventory_hostname': inventory_hostname}) | to_nice_json }}"
-        dest: "{{ ruta_json }}"
+        content: "{{ ansible_facts
+                     | combine({'inventory_hostname': inventory_hostname})
+                     | to_nice_json }}"
+        dest: "{{ ruta_json_remoto }}"
 
-    - name: Copiar JSON al nodo de control (Semaphore)
+    - name: Traer JSON al nodo de control
       fetch:
-        src: "{{ ruta_json }}"
-        dest: "{{ ruta_json_local }}/"
+        src: "{{ ruta_json_remoto }}"
+        dest: "{{ ruta_json_ctl }}/"
         flat: true
 
-- name: Procesar los JSON y generar Excel (desde Semaphore)
+
+# ==============================================================
+# 2. Play LOCAL: genera el Excel con los JSON ya copiados
+# ==============================================================
+
+- name: Generar Excel a partir de los JSON (control-node)
   hosts: localhost
   gather_facts: no
+  become: false
 
   vars:
-    ruta_json_local: "/home/semaphore/Excels"
+    ruta_json_ctl: "/home/semaphore/Excels"
     script_python: "/home/semaphore/Excels/generar_excel.py"
-    ruta_excel: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
-
-    - name: Crear carpeta local para los JSON si no existe
-      file:
-        path: "{{ ruta_json_local }}"
-        state: directory
-        mode: '0755'
-      become: true
-
-    - name: Eliminar script Python anterior si existe
-      file:
-        path: "{{ script_python }}"
-        state: absent
-      become: true
-
-    - name: Copiar script Python al nodo local (Semaphore)
+    - name: Copiar (o actualizar) script Python
       copy:
         src: "./generar_excel.py"
         dest: "{{ script_python }}"
-        mode: '0755'
-      become: true
+        mode: "0755"
+        checksum: "sha1"
+        force: false
 
-    - name: Ejecutar script Python para generar Excel con la información
-      command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_local }}/info_*.json"
+    - name: Ejecutar script para generar el Excel
+      command: >
+        python3 {{ script_python }}
+        {{ ruta_excel }}
+        {{ ruta_json_ctl }}/info_*.json
+      register: excel_gen
 
-    - name: Copiar Excel generado al directorio final del usuario
+    - name: Mostrar salida del script
+      debug:
+        var: excel_gen.stdout
+
+    - name: Copiar Excel al directorio final del usuario
       copy:
         src: "{{ ruta_excel }}"
         dest: "/home/userti/Documentos/Excels/Inventario_Equipos_DMZ.xlsx"
-      become: true
+        mode: "0644"
