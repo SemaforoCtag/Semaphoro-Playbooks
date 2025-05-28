@@ -20,9 +20,13 @@ def main():
     salida_excel, json_glob = sys.argv[1:3]
     filas = []
 
-    for path in glob.glob(json_glob):
-        with open(path) as f:
-            info  = json.load(f)
+    for json_path in glob.glob(json_glob):
+        print("Leyendo:", json_path)
+        with open(json_path, 'r') as f:
+            try:
+                info = json.load(f)
+            except Exception as e:
+                print("Json invalido:", e)
             facts = info.get('ansible_facts', info)         # ← clave del arreglo
 
         total_disk = sum(
