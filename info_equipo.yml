@@ -130,14 +130,16 @@
   become: false
   tasks:
     
+    # 1) Crear la carpeta destino (módulo shell, no win_shell)
     - name: Crear carpeta destino si no existe
       shell: |
         if (-not (Test-Path 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ')) {
-          Nem-Item -ItemType Directory -Path 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ' | Out-Null
+          New-Item -ItemType Directory -Path 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ' | Out-Null
         }
-    
-    - name: copiar Excel mediant modulo copy (usa SFTP)
+
+    # 2) Copiar el Excel mediante SFTP (módulo copy)
+    - name: Copiar Excel al escritorio
       copy:
-        src: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
-        dest: C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ\Inventario_Equipos_DMZ.xlsx
+        src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
+        dest: "C:/Users/pedfer4218/Desktop/InventarioEquiposDMZ/Inventario_Equipos_DMZ.xlsx"
         mode: "0644"
