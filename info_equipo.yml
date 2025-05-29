@@ -78,8 +78,8 @@
     - name: Guardar facts + puertos en JSON en el host
       copy:
         content: "{{ ansible_facts
-                     | combine({'inventory_hostname': inventory_hostname})
                      | combine(puertos_db)
+                     | combine({'inventory_hostname': inventory_hostname})
                      | to_nice_json }}"
         dest: "{{ ruta_json_remoto }}"
         force: yes                         # sobreescribe si existe
