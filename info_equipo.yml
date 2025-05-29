@@ -1,20 +1,18 @@
 ---
-# ==============================================================
-# 1. Play sobre TODOS los hosts: recopila facts, muestra resumen
-#    y copia cada JSON al nodo de control
-# ==============================================================
-
-- name: Recopilar facts y copiarlos al controlador
+########################################################################
+# 1. Linux (semaforos): facts + puertos DB  → JSON  → fetch al control  #
+########################################################################
+- name: Recoger facts y escanear puertos DB
   hosts: semaforos
   gather_facts: yes
-  become: true
+  become: true                                  # para escribir en /tmp
 
   vars:
     ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
     ruta_json_ctl:    "/home/semaphore/Excels"
 
+  # Crear carpeta local una sola vez
   pre_tasks:
-    # Creamos la carpeta en el nodo de control (una sola vez)
     - name: Crear carpeta local para los JSON
       file:
         path: "{{ ruta_json_ctl }}"
@@ -25,54 +23,66 @@
       become: false
 
   tasks:
-    # ----------------------------------------------------------
-    # 1) RESUMEN legible en consola (lo que acabará en el Excel)
-    # ----------------------------------------------------------
-    - name: Construir resumen para Excel
+    # ----- Escaneo de puertos DB -------------------------------------
+    - name: Verificar MySQL (3306)
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 3306
+        timeout: 4
+      register: mysql_port
+      ignore_errors: yes
+
+    - name: Verificar PostgreSQL (5432)
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 5432
+        timeout: 4
+      register: postgres_port
+      ignore_errors: yes
+
+    - name: Verificar SQL Server (1433)
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 1433
+        timeout: 4
+      register: sqlserver_port
+      ignore_errors: yes
+
+    - name: Verificar Oracle (1521)
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 1521
+        timeout: 4
+      register: oracle_port
+      ignore_errors: yes
+
+    - name: Verificar MongoDB (27017)
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 27017
+        timeout: 4
+      register: mongodb_port
+      ignore_errors: yes
+
+    # ----- Consolidar resultados -------------------------------------
+    - name: Consolidar puertos abiertos en puertos_db
       set_fact:
-        excel_summary:
-          IP: "{{ ansible_default_ipv4.address | default(inventory_hostname) }}"
-          Hostname: "{{ ansible_hostname }}"
-          SO: "{{ ansible_distribution }} {{ ansible_distribution_version }}"
-          Kernel: "{{ ansible_kernel }}"
-          Arquitectura: "{{ ansible_architecture }}"
-          CPU: "{{ ansible_processor[2] | default(ansible_processor[-1]) }}"
-          RAM_Total_GB: "{{ (ansible_memtotal_mb | int / 1024) | round(0, 'ceil') | int }}"
-          RAM_Libre_GB: "{{ (ansible_memfree_mb  | int / 1024) | round(0, 'ceil') | int }}"
-          # ---------- disco montado ----------
-          Disco_Total_GB: >-
-            {{
-              (ansible_mounts
-                | selectattr('device','match','^/dev/(sd|nvme)')
-                | map(attribute='size_total')
-                | sum
-                | float / 1073741824) | round(2)
-            }}
-          Disco_Libre_GB: >-
-            {{
-              (ansible_mounts
-                | selectattr('device','match','^/dev/(sd|nvme)')
-                | map(attribute='size_available')
-                | sum
-                | float / 1073741824) | round(2)
-            }}
-          Tipo_maquina: "{{ 'Virtual' if ansible_virtualization_role == 'guest' else 'Física' }}"
+        puertos_db:
+          mysql:      "{{ mysql_port    is defined and mysql_port   .elapsed < 3 }}"
+          postgresql: "{{ postgres_port is defined and postgres_port.elapsed < 3 }}"
+          sqlserver:  "{{ sqlserver_port is defined and sqlserver_port.elapsed < 3 }}"
+          oracle:     "{{ oracle_port   is defined and oracle_port  .elapsed < 3 }}"
+          mongodb:    "{{ mongodb_port  is defined and mongodb_port .elapsed < 3 }}"
 
-
-
-    - name: Mostrar resumen en consola
-      debug:
-        var: excel_summary
-
-    # ----------------------------------------------------------
-    # 2) Guardar los facts en JSON (incluye inventory_hostname)
-    # ----------------------------------------------------------
-    - name: Guardar facts del sistema en JSON en el host
+    # ----- Guardar facts + puertos y traerlos -------------------------
+    - name: Guardar facts + puertos en JSON en el host
       copy:
         content: "{{ ansible_facts
                      | combine({'inventory_hostname': inventory_hostname})
+                     | combine(puertos_db)
                      | to_nice_json }}"
         dest: "{{ ruta_json_remoto }}"
+        force: yes                         # sobreescribe si existe
 
     - name: Traer JSON al nodo de control
       fetch:
@@ -80,23 +90,19 @@
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
-
-# ==============================================================
-# 2. Play LOCAL: genera el Excel con los JSON ya copiados
-# ==============================================================
-
-- name: Generar Excel a partir de los JSON (control-node)
+#############################################################
+# 2. localhost: genera/actualiza Inventario_Equipos_DMZ.xlsx #
+#############################################################
+- name: Generar Excel a partir de los JSON
   hosts: localhost
   gather_facts: no
-  become: false
-
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
     script_python: "/home/semaphore/Excels/generar_excel.py"
     ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
-    - name: Copiar (o actualizar) script Python
+    - name: Copiar / actualizar script Python
       copy:
         src: "./generar_excel.py"
         dest: "{{ script_python }}"
@@ -110,26 +116,17 @@
         {{ ruta_json_ctl }}/info_*.json
       register: excel_gen
 
-    - name: Mostrar salida del script
-      debug:
+    - debug:
         var: excel_gen.stdout
 
-    - name: Copiar Excel al directorio final del usuario
-      copy:
-        src: "{{ ruta_excel }}"
-        dest: "/home/userti/Documentos/Excels/Inventario_Equipos_DMZ.xlsx"
-        mode: "0644"
-
-# ==============================================================
-# 3. Play LOCAL: copiar el excel a equipo windows
-# ==============================================================
-
-- name: copiar el excel al windows
+################################################################
+# 3. Windows (SSH/SFTP): copiar el Excel al escritorio Windows #
+################################################################
+- name: Copiar el Excel al Windows
   hosts: Pc_Windows
   gather_facts: no
-  become: false
   tasks:
-    - name: Copiar Excel al escritorio
+    - name: Copiar Excel (crea ruta si falta)
       copy:
         src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
         dest: "C:/Users/pedfer4218/Desktop/InventarioEquiposDMZ/Inventario_Equipos_DMZ.xlsx"
