@@ -127,6 +127,7 @@
 - name: copiar el excel al windows
   hosts: Pc_Windows
   gather_facts: no
+  become: false
   tasks:
     
     - name: Crear carpeta destino si no existe
