@@ -4,7 +4,7 @@
 # ==================================================================
 
 - name: Escaneo de red en busca de puertos de DB
-  hosts: all
+  hosts: semaforos
   gather_facts: no
 
   tasks:
