@@ -143,3 +143,4 @@
         src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
         dest: "C:/Users/pedfer4218/Desktop/InventarioEquiposDMZ/Inventario_Equipos_DMZ.xlsx"
         mode: "0644"
+        directory_mode: "0755"
