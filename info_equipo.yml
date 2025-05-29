@@ -128,10 +128,15 @@
   hosts: Pc_Windows
   gather_facts: no
   tasks:
-    - win_file:
-        path: 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ'
-        state: directory
     
-    - win_copy:
-        src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
-        dest: 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ'
+    - name: Crear carpeta destino si no existe
+      ansible.windows.win_shell: |
+        if (-not (Test-Path 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ')) {
+          Nem-Item -ItemType Directory -Path 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ' | Out-Null
+        }
+    
+    - name: copiar Excel mediant modulo copy (usa SFTP)
+      copy:
+        src: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+        dest: C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ\Inventario_Equipos_DMZ.xlsx
+        mode: "0644"
