@@ -119,3 +119,19 @@
         src: "{{ ruta_excel }}"
         dest: "/home/userti/Documentos/Excels/Inventario_Equipos_DMZ.xlsx"
         mode: "0644"
+
+# ==============================================================
+# 3. Play LOCAL: copiar el excel a equipo windows
+# ==============================================================
+
+- name: copiar el excel al windows
+  hosts: Pc_Windows
+  gather_facts: no
+  tasks:
+    - win_file:
+        path: 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ'
+        state: directory
+    
+    - win_copy:
+        src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
+        dest: 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ'
