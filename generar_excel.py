@@ -103,12 +103,13 @@ def fila(facts: dict, host_inv: str) -> dict:
     disk_used_gb = round(disk_total_mnt_gb - disk_free_gb, 2)
 
     # ---------- Puertos DB ----------
+    
     db_cols = {
-        "MySQL": facts.get("mysql", False),
-        "PostgreSQL": facts.get("postgresql", False),
-        "SQLServer": facts.get("sqlserver", False),
-        "Oracle": facts.get("oracle", False),
-        "MongoDB": facts.get("mongodb", False),
+        "MySQL (3306)":      "Activo"   if facts.get("mysql",      False) else "Inactivo",
+        "PostgreSQL (5432)": "Activo"   if facts.get("postgresql", False) else "Inactivo",
+        "SQLServer (1433)":  "Activo"   if facts.get("sqlserver",  False) else "Inactivo",
+        "Oracle (1521)":     "Activo"   if facts.get("oracle",     False) else "Inactivo",
+        "MongoDB (27017)":    "Activo"   if facts.get("mongodb",    False) else "Inactivo",
     }
 
     # --- Tipo de máquina ---
