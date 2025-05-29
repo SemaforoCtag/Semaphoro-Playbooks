@@ -131,7 +131,7 @@
   tasks:
     
     - name: Crear carpeta destino si no existe
-      ansible.windows.win_shell: |
+      shell: |
         if (-not (Test-Path 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ')) {
           Nem-Item -ItemType Directory -Path 'C:\Users\pedfer4218\Desktop\InventarioEquiposDMZ' | Out-Null
         }
