@@ -129,8 +129,6 @@
   gather_facts: no
   become: false
   tasks:
-    
-    # 1) Copiar el Excel mediante SFTP (módulo copy)
     - name: Copiar Excel al escritorio
       copy:
         src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
