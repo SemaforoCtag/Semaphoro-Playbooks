@@ -5,7 +5,7 @@
 # ==============================================================
 
 - name: Recopilar facts y copiarlos al controlador
-  hosts: all
+  hosts: semaforos
   gather_facts: yes
   become: true
 
