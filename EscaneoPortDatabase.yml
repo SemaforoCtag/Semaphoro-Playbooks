@@ -1,16 +1,15 @@
 ---
-# ================================================================== #
-# 1. Play sobre TODOS los hosts: Escanea puertos de bases de datos   #
-# ================================================================== #
+# ==================================================================
+# 1. Play sobre TODOS los hosts: Escanea puertos de bases de datos
+# ==================================================================
 
 - name: Escaneo de red en busca de puertos de DB
   hosts: all
   gather_facts: no
 
   tasks:
-
     - name: Verificar puertos de MySQL
-      anisble.builtin.wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: 3306
         timeout: 4
@@ -18,7 +17,7 @@
       ignore_errors: yes
 
     - name: Verificar puertos de PostgreSQL
-      anisble.builtin.wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: 5432
         timeout: 4
@@ -26,7 +25,7 @@
       ignore_errors: yes
 
     - name: Verificar puertos de SQL Server
-      anisble.builtin.wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: 1433
         timeout: 4
@@ -34,7 +33,7 @@
       ignore_errors: yes
 
     - name: Verificar puertos de Oracle
-      anisble.builtin.wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: 1521
         timeout: 4
@@ -42,24 +41,24 @@
       ignore_errors: yes
 
     - name: Verificar puertos de MongoDB
-      anisble.builtin.wait_for:
+      ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
         port: 27017
         timeout: 4
       register: mongodb_port
       ignore_errors: yes
 
-    - name: Ejecutamos y mostramos los resultados del Escaneo
+    - name: Ejecutar y mostrar resultados del escaneo
       ansible.builtin.shell: |
-        echo "Resultados del escaneo de puertos de bases de datos: "
-        echo " MySQL (Puerto 3306): {{ 'Activo' if mysql_port.elapsed < 3 else 'Inactivo' }}"
-        echo " PostgreSQL (Puerto 5432): {{ 'Activo' if postgres_port.elapsed < 3 else 'Inactivo' }}"
-        echo " SQL Server (Puerto 1433): {{ 'Activo' if sqlserver_port.elapsed < 3 else 'Inactivo' }}"
-        echo " Oracle (Puerto 1521): {{ 'Activo' if oracle_port.elapsed < 3 else 'Inactivo' }}"
-        echo " Mongo (Puerto 27017): {{ 'Activo' if mongodb_port.elapsed < 3 else 'Inactivo' }}"
+        echo "Resultados del escaneo de puertos de bases de datos:"
+        echo "  MySQL (3306):      {{ 'Activo' if mysql_port.elapsed < 3 else 'Inactivo' }}"
+        echo "  PostgreSQL (5432): {{ 'Activo' if postgres_port.elapsed < 3 else 'Inactivo' }}"
+        echo "  SQL Server (1433): {{ 'Activo' if sqlserver_port.elapsed < 3 else 'Inactivo' }}"
+        echo "  Oracle (1521):     {{ 'Activo' if oracle_port.elapsed < 3 else 'Inactivo' }}"
+        echo "  MongoDB (27017):   {{ 'Activo' if mongodb_port.elapsed < 3 else 'Inactivo' }}"
       delegate_to: localhost
       register: scan_output
 
     - name: Mostrar resultados en consola
       ansible.builtin.debug:
-        msg: " {{ scan_output.stdout_lines }}"
+        msg: "{{ scan_output.stdout_lines }}"
