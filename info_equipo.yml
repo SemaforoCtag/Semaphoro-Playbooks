@@ -156,16 +156,43 @@
         var: excel_gen.stdout
 
 ################################################################
-# 3. Windows (SSH/SFTP): copiar el Excel y TXT a Windows #
+# 3. Windows: copiar Excel y TXT al recurso SMB  ###############
 ################################################################
-- name: Copiar Excel y TXT directamente desde localhost al recurso SMB
-  hosts: localhost
+- name: Copiar inventario al Windows y después al recurso \\ctag\data\COMUN
+  hosts: Pc_Windows
+  gather_facts: no
+
+  vars:
+    tmp_dir:            "C:\\Temp"
+    excel_file:         "Inventario_Equipos_DMZ.xlsx"
+    txt_file:           "Inventario_Equipos_DMZ.txt"
+    src_dir_linux:      "/home/semaphore/Excels"
+    smb_share:          "\\\\ctag\\data\\COMUN\\Ansible"   
+
   tasks:
-    - copy:
-        src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
-        dest: /mnt/ctag/COMUN/Ansible/Inventario_Equipos_DMZ.xlsx
-    - copy:
-        src: /home/semaphore/Excels/Inventario_Equipos_DMZ.txt
-        dest: /mnt/ctag/COMUN/Ansible/Inventario_Equipos_DMZ.txt
+    # 1) Asegurar carpeta temporal
+    - name: Garantizar {{ tmp_dir }} existe
+      win_file:
+        path: "{{ tmp_dir }}"
+        state: directory
+
+    # 2) Copiar ficheros desde el nodo de control al disco local de Windows
+    - name: Copiar Excel al disco local
+      win_copy:
+        src: "{{ src_dir_linux }}/{{ excel_file }}"
+        dest: "{{ tmp_dir }}\\{{ excel_file }}"
+
+    - name: Copiar TXT al disco local
+      win_copy:
+        src: "{{ src_dir_linux }}/{{ txt_file }}"
+        dest: "{{ tmp_dir }}\\{{ txt_file }}"
+
+    # 3) Mover a la ruta de red
+    - name: Copiar ambos archivos al recurso SMB
+      win_shell: |
+        Copy-Item -Path "{{ tmp_dir }}\\{{ excel_file }}" -Destination "{{ smb_share }}" -Force
+        Copy-Item -Path "{{ tmp_dir }}\\{{ txt_file }}"   -Destination "{{ smb_share }}" -Force
+      args:
+        executable: powershell
 
 
