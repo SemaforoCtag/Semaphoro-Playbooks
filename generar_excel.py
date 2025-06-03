@@ -119,6 +119,9 @@ def fila(facts: dict, host_inv: str) -> dict:
         else "Física"
     )
 
+    puertos_txt = ", ".join(map(str, facts.get("listening_ports", [])))
+   
+
     return {
         "Fecha y Hora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "IP": ip,
@@ -134,6 +137,7 @@ def fila(facts: dict, host_inv: str) -> dict:
         "Disco Usado (GB)": disk_used_gb,
         "Disco Libre (GB)": disk_free_gb,
         "Tipo de maquina": tipo,
+        "Puertos en escucha": puertos_txt,
         **db_cols,  # columnas de puertos
     }
 

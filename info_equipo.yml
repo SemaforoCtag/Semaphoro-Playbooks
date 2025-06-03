@@ -1,17 +1,19 @@
 ---
 ########################################################################
-# 1. Linux (semaforos): facts + puertos DB  → JSON  → fetch al control  #
+# 1. Linux (semaforos): facts + PUERTOS → JSON → fetch al nodo control #
 ########################################################################
-- name: Recoger facts y escanear puertos DB
+- name: Recoger facts y escanear puertos
   hosts: semaforos
   gather_facts: yes
-  become: true                                  # para escribir en /tmp
+  become: true                                      # escribir /tmp y usar ss
 
   vars:
     ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
     ruta_json_ctl:    "/home/semaphore/Excels"
 
-  # Crear carpeta local una sola vez
+  # -------------------------------------------------------------------
+  # PRE  : crear la carpeta local solo una vez
+  # -------------------------------------------------------------------
   pre_tasks:
     - name: Crear carpeta local para los JSON
       file:
@@ -23,9 +25,11 @@
       become: false
 
   tasks:
-    # ----- Escaneo de puertos DB -------------------------------------
-    - name: Verificar MySQL (3306)
-      ansible.builtin.wait_for:
+  # -------------------------------------------------------------------
+  # 1A) Escaneo rápido de PUERTOS de bases de datos (método wait_for)
+  # -------------------------------------------------------------------
+    - name: Verificar MySQL (3306)      # todas estas tareas siguen igual
+      wait_for:
         host: "{{ inventory_hostname }}"
         port: 3306
         timeout: 4
@@ -33,7 +37,7 @@
       ignore_errors: yes
 
     - name: Verificar PostgreSQL (5432)
-      ansible.builtin.wait_for:
+      wait_for:
         host: "{{ inventory_hostname }}"
         port: 5432
         timeout: 4
@@ -41,7 +45,7 @@
       ignore_errors: yes
 
     - name: Verificar SQL Server (1433)
-      ansible.builtin.wait_for:
+      wait_for:
         host: "{{ inventory_hostname }}"
         port: 1433
         timeout: 4
@@ -49,7 +53,7 @@
       ignore_errors: yes
 
     - name: Verificar Oracle (1521)
-      ansible.builtin.wait_for:
+      wait_for:
         host: "{{ inventory_hostname }}"
         port: 1521
         timeout: 4
@@ -57,32 +61,64 @@
       ignore_errors: yes
 
     - name: Verificar MongoDB (27017)
-      ansible.builtin.wait_for:
+      wait_for:
         host: "{{ inventory_hostname }}"
         port: 27017
         timeout: 4
       register: mongodb_port
       ignore_errors: yes
 
-    # ----- Consolidar resultados -------------------------------------
-    - name: Consolidar puertos abiertos en puertos_db
+    - name: Consolidar resultado de puertos DB
       set_fact:
         puertos_db:
-          mysql:      "{{ mysql_port    is defined and mysql_port   .elapsed < 3 }}"
-          postgresql: "{{ postgres_port is defined and postgres_port.elapsed < 3 }}"
+          mysql:      "{{ mysql_port    is defined and mysql_port.elapsed     < 3 }}"
+          postgresql: "{{ postgres_port is defined and postgres_port.elapsed  < 3 }}"
           sqlserver:  "{{ sqlserver_port is defined and sqlserver_port.elapsed < 3 }}"
-          oracle:     "{{ oracle_port   is defined and oracle_port  .elapsed < 3 }}"
-          mongodb:    "{{ mongodb_port  is defined and mongodb_port .elapsed < 3 }}"
+          oracle:     "{{ oracle_port   is defined and oracle_port.elapsed    < 3 }}"
+          mongodb:    "{{ mongodb_port  is defined and mongodb_port.elapsed   < 3 }}"
 
-    # ----- Guardar facts + puertos y traerlos -------------------------
+  # -------------------------------------------------------------------
+  # 1B) NUEVO: listar TODOS los puertos TCP/UDP en escucha con ss/netstat
+  # -------------------------------------------------------------------
+    - name: Obtener puertos TCP/UDP en escucha (ss)
+      shell: |
+        ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
+      register: listening_ports_cmd
+      changed_when: false
+      failed_when: false        # por si ss no existe
+
+    - name: (Fallback) Obtener puertos de netstat si ss no está disponible
+      shell: |
+        netstat -lntu 2>/dev/null | awk 'NR>2 {print $4}' | awk -F':' '{print $NF}' | sort -n | uniq
+      register: listening_ports_netstat
+      changed_when: false
+      when: listening_ports_cmd.rc != 0
+
+    - name: Definir lista final de puertos en escucha
+      set_fact:
+        listening_ports: >-
+          {{
+            (listening_ports_cmd.rc == 0
+             and listening_ports_cmd.stdout_lines
+             or listening_ports_netstat.stdout_lines)
+          }}
+
+    - name: Mostrar puertos en escucha
+      debug:
+        msg: "Puertos en escucha en {{ inventory_hostname }}: {{ listening_ports }}"
+
+  # -------------------------------------------------------------------
+  # 1C) Guardar facts + puertos → JSON y traerlo al control
+  # -------------------------------------------------------------------
     - name: Guardar facts + puertos en JSON en el host
       copy:
         content: "{{ ansible_facts
                      | combine(puertos_db)
+                     | combine({'listening_ports': listening_ports})
                      | combine({'inventory_hostname': inventory_hostname})
                      | to_nice_json }}"
         dest: "{{ ruta_json_remoto }}"
-        force: yes                         # sobreescribe si existe
+        force: yes
 
     - name: Traer JSON al nodo de control
       fetch:
