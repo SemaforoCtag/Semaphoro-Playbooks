@@ -158,21 +158,14 @@
 ################################################################
 # 3. Windows (SSH/SFTP): copiar el Excel y TXT a Windows #
 ################################################################
-- name: Copiar el Excel al Windows
-  hosts: Pc_Windows
-  gather_facts: no
+- name: Copiar Excel y TXT directamente desde localhost al recurso SMB
+  hosts: localhost
   tasks:
-    - name: Copiar Excel (crea ruta si falta)
-      copy:
+    - copy:
         src: /home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx
-        dest: "\\\\ctag/data/COMUN/Ansible/Inventario_Equipos_DMZ.xlsx"
-        mode: "0644"
-        directory_mode: "0755"
-
-    - name: Copiar TXT al Windows
-      copy:
+        dest: /mnt/ctag/COMUN/Ansible/Inventario_Equipos_DMZ.xlsx
+    - copy:
         src: /home/semaphore/Excels/Inventario_Equipos_DMZ.txt
-        dest: "\\\\ctag/data/COMUN/Ansible/Inventario_Equipos_DMZ.txt"
-        mode: "0644"
-        directory_mode: "0755"
+        dest: /mnt/ctag/COMUN/Ansible/Inventario_Equipos_DMZ.txt
+
 
