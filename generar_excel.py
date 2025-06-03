@@ -15,6 +15,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
+from openpyxl.utils import get_column_letter
 
 
 # ---------- utilidades ----------
@@ -154,19 +155,28 @@ def main():
     for path in glob.glob(patron):
         with open(path, "r") as f:
             info = json.load(f)
-
-        facts = info.get("ansible_facts", info)  # por compatibilidad
+        facts = info.get("ansible_facts", info)
         filas.append(fila(facts, info.get("inventory_hostname", "desconocido")))
-        
-        # --TxT --
+
     df = pd.DataFrame(filas).sort_values("IP")
-    df.to_excel(salida, index=False)
 
+    # ---------- EXCEL ----------
+    with pd.ExcelWriter(salida, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Inventario DMZ", index=False)
+
+        # Ajuste de anchos
+        hoja = writer.sheets["Inventario DMZ"]
+        for i, col in enumerate(df.columns, 1):
+            ancho = max(len(str(x)) for x in df[col].astype(str).tolist() + [col]) + 2
+            hoja.column_dimensions[get_column_letter(i)].width = ancho
+
+    # ---------- TXT ----------
     txt_path = Path(salida).with_suffix(".txt")
-    df.to_csv(txt_path, sep="\t", index=False)
-    print(f"✅ Excel generado con {len(filas)} filas → {salida}")
-    print(f"✅ TXT  generado con {len(filas)} filas → {txt_path}")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(df.to_string(index=False))
 
+    print(f"✅ Excel generado con {len(filas)} filas → {salida}")
+    print(f"✅ TXT   generado con {len(filas)} filas → {txt_path}")
 
 if __name__ == "__main__":
     main()
