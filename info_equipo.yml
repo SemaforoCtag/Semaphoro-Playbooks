@@ -169,10 +169,10 @@
         mode: "0644"
         directory_mode: "0755"
 
-- name: Copiar TXT al Windows
-  copy:
-    src: /home/semaphore/Excels/Inventario_Equipos_DMZ.txt
-    dest: "C:/Users/pedfer4218/Desktop/InventarioEquiposDMZ/Inventario_Equipos_DMZ.txt"
-    mode: "0644"
-    directory_mode: "0755"
+    - name: Copiar TXT al Windows
+      copy:
+        src: /home/semaphore/Excels/Inventario_Equipos_DMZ.txt
+        dest: "C:/Users/pedfer4218/Desktop/InventarioEquiposDMZ/Inventario_Equipos_DMZ.txt"
+        mode: "0644"
+        directory_mode: "0755"
 
