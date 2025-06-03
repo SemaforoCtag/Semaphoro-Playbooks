@@ -13,7 +13,7 @@ import glob
 import math
 import re
 from datetime import datetime
-
+from pathlib import Path
 import pandas as pd
 
 
@@ -142,6 +142,7 @@ def fila(facts: dict, host_inv: str) -> dict:
     }
 
 
+
 # ---------- main ----------
 def main():
     if len(sys.argv) < 3:
@@ -156,10 +157,15 @@ def main():
 
         facts = info.get("ansible_facts", info)  # por compatibilidad
         filas.append(fila(facts, info.get("inventory_hostname", "desconocido")))
-
+        
+        # --TxT --
     df = pd.DataFrame(filas).sort_values("IP")
     df.to_excel(salida, index=False)
+
+    txt_path = Path(salida).with_suffix(".txt")
+    df.to_csv(txt_path, sep="\t", index=False)
     print(f"✅ Excel generado con {len(filas)} filas → {salida}")
+    print(f"✅ TXT  generado con {len(filas)} filas → {txt_path}")
 
 
 if __name__ == "__main__":
