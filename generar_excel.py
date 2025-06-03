@@ -14,8 +14,11 @@ import math
 import re
 from datetime import datetime
 from pathlib import Path
-import pandas as pd
+from tabulate import tabulate         
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.table import Table, TableStyleInfo 
+import pandas as pd
+
 
 
 # ---------- utilidades ----------
@@ -164,16 +167,37 @@ def main():
     with pd.ExcelWriter(salida, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="Inventario DMZ", index=False)
 
-        # Ajuste de anchos
+        # --Ajuste de anchos
         hoja = writer.sheets["Inventario DMZ"]
         for i, col in enumerate(df.columns, 1):
             ancho = max(len(str(x)) for x in df[col].astype(str).tolist() + [col]) + 2
             hoja.column_dimensions[get_column_letter(i)].width = ancho
 
+        # --Tabla estructurada para el excel--
+         # ----- Crear tabla estructurada -----
+        n_filas, n_cols = df.shape
+        ultima_col = get_column_letter(n_cols)
+        tabla = Table(
+            displayName="InventarioDMZ",
+            ref=f"A1:{ultima_col}{n_filas+1}"        
+        )
+
+        style = TableStyleInfo(
+            name="TableStyleMedium9",
+            showFirstColumn=False,
+            showLastColumn=False,
+            showRowStripes=True,
+            showColumnStripes=False,
+        )
+        tabla.tableStyleInfo = style
+        hoja.add_table(tabla)
+   
+
     # ---------- TXT ----------
     txt_path = Path(salida).with_suffix(".txt")
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(df.to_string(index=False))
+        tabla = tabulate(df, headers="keys", tablefmt="grid", showindex=False)
+        f.write(tabla + "\n")
 
     print(f"✅ Excel generado con {len(filas)} filas → {salida}")
     print(f"✅ TXT   generado con {len(filas)} filas → {txt_path}")
