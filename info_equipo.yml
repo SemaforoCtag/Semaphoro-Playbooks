@@ -163,17 +163,25 @@
   gather_facts: no
 
   vars:
-    tmp_dir:      "C:\\Temp"
-    excel_file:   "Inventario_Equipos_DMZ.xlsx"
-    txt_file:     "Inventario_Equipos_DMZ.txt"
-    src_dir:      "/home/semaphore/Excels"
+    tmp_dir:    "C:\\Temp"
+    excel_file: "Inventario_Equipos_DMZ.xlsx"
+    txt_file:   "Inventario_Equipos_DMZ.txt"
+    src_dir:    "/home/semaphore/Excels"
 
-    smb_share:    "\\\\srvctdep02\\Deploy\\Ansible"
-    # ► Credenciales sacadas del entorno (ya exportadas por Semaphore)
-    smb_user:     "{{ lookup('env', 'win_user') }}"
-    smb_pass:     "{{ lookup('env', 'win_password') }}"
+    smb_share:  "\\\\srvctdep02\\Deploy\\Ansible"
+
+    # ► Credenciales sacadas del entorno exportado por Semaphore
+    smb_user: "{{ lookup('env', 'win_user') }}"
+    smb_pass: "{{ lookup('env', 'win_password') }}"
 
   tasks:
+    # ───────────────────── DEBUG CREDENCIALES ─────────────────────
+    - name: Comprobar que las credenciales llegan desde Semaphore
+      debug:
+        msg: |
+          smb_user   = {{ smb_user }}
+          pass_len   = {{ smb_pass | length }}
+
     # 1) Carpeta temporal local
     - win_file:
         path: "{{ tmp_dir }}"
@@ -183,11 +191,12 @@
     - win_copy:
         src: "{{ src_dir }}/{{ excel_file }}"
         dest: "{{ tmp_dir }}\\{{ excel_file }}"
+
     - win_copy:
         src: "{{ src_dir }}/{{ txt_file }}"
         dest: "{{ tmp_dir }}\\{{ txt_file }}"
 
-    # 3) Mapear el share con tus credenciales y copiar
+    # 3) Mapear el share SMB y copiar
     - name: Copiar al recurso SMB con tus credenciales
       win_shell: |
         $sec  = ConvertTo-SecureString "{{ smb_pass }}" -AsPlainText -Force
@@ -202,5 +211,3 @@
         Remove-PSDrive Z
       args:
         executable: powershell
-
-
