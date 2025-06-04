@@ -158,7 +158,7 @@
 ################################################################
 # 3. Windows: copiar al share \\srvctdep02\Deploy\Ansible ######
 ################################################################
-- name: Copiar inventario a \\srvctdep02\Deploy\Ansible
+- name: Copiar inventario a Ruta de red
   hosts: Pc_Windows
   gather_facts: no
 
