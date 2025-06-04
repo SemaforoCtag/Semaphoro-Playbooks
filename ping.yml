@@ -5,7 +5,7 @@
 
   vars:
     # Si no se proporciona, toma este valor por defecto (puedes cambiarlo o dejar vacío)
-    target_ip: "{{ TARGET_IP' | default('') }}"
+    target_ip: "{{ TARGET_IP | default('') }}"
 
   tasks:
     - name: Validar que se ha pasado una IP
