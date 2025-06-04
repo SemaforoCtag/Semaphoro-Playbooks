@@ -156,42 +156,50 @@
         var: excel_gen.stdout
 
 ################################################################
-# 3. Windows: copiar Excel y TXT al recurso SMB  ###############
+# 3. Windows: copiar al share \\srvctdep02\Deploy\Ansible ######
 ################################################################
-- name: Copiar inventario al Windows y después al recurso \\ctag\data\COMUN
+- name: Copiar inventario a \\srvctdep02\Deploy\Ansible
   hosts: Pc_Windows
   gather_facts: no
 
   vars:
-    tmp_dir:            "C:\\Temp"
-    excel_file:         "Inventario_Equipos_DMZ.xlsx"
-    txt_file:           "Inventario_Equipos_DMZ.txt"
-    src_dir_linux:      "/home/semaphore/Excels"
-    smb_share:          "\\\\ctag\\data\\COMUN\\Ansible"   
+    tmp_dir:      "C:\\Temp"
+    excel_file:   "Inventario_Equipos_DMZ.xlsx"
+    txt_file:     "Inventario_Equipos_DMZ.txt"
+    src_dir:      "/home/semaphore/Excels"
+
+    smb_share:    "\\\\srvctdep02\\Deploy\\Ansible"
+    # ► Credenciales sacadas del entorno (ya exportadas por Semaphore)
+    smb_user:     "{{ lookup('env', 'win_user') }}"
+    smb_pass:     "{{ lookup('env', 'win_password') }}"
 
   tasks:
-    # 1) Asegurar carpeta temporal
-    - name: Garantizar {{ tmp_dir }} existe
-      win_file:
+    # 1) Carpeta temporal local
+    - win_file:
         path: "{{ tmp_dir }}"
         state: directory
 
-    # 2) Copiar ficheros desde el nodo de control al disco local de Windows
-    - name: Copiar Excel al disco local
-      win_copy:
-        src: "{{ src_dir_linux }}/{{ excel_file }}"
+    # 2) Copiar ficheros desde el nodo de control
+    - win_copy:
+        src: "{{ src_dir }}/{{ excel_file }}"
         dest: "{{ tmp_dir }}\\{{ excel_file }}"
-
-    - name: Copiar TXT al disco local
-      win_copy:
-        src: "{{ src_dir_linux }}/{{ txt_file }}"
+    - win_copy:
+        src: "{{ src_dir }}/{{ txt_file }}"
         dest: "{{ tmp_dir }}\\{{ txt_file }}"
 
-    # 3) Mover a la ruta de red
-    - name: Copiar ambos archivos al recurso SMB
+    # 3) Mapear el share con tus credenciales y copiar
+    - name: Copiar al recurso SMB con tus credenciales
       win_shell: |
-        Copy-Item -Path "{{ tmp_dir }}\\{{ excel_file }}" -Destination "{{ smb_share }}" -Force
-        Copy-Item -Path "{{ tmp_dir }}\\{{ txt_file }}"   -Destination "{{ smb_share }}" -Force
+        $sec  = ConvertTo-SecureString "{{ smb_pass }}" -AsPlainText -Force
+        $cred = New-Object pscredential ("{{ smb_user }}", $sec)
+
+        New-PSDrive -Name Z -PSProvider FileSystem -Root "{{ smb_share }}" `
+                    -Credential $cred -Scope Script -ErrorAction Stop
+
+        Copy-Item "{{ tmp_dir }}\\{{ excel_file }}" -Destination "Z:\" -Force
+        Copy-Item "{{ tmp_dir }}\\{{ txt_file }}"   -Destination "Z:\" -Force
+
+        Remove-PSDrive Z
       args:
         executable: powershell
 
