@@ -6,8 +6,6 @@
 - name: Escaneo de red en busca de puertos de DB
   hosts: semaforos
   gather_facts: yes
-  vars:
-    ruta_json_remoto: "/tmp/info_{{ inventory_hostname}}.json"
 
   tasks:
     - name: Verificar puertos de MySQL
@@ -58,10 +56,3 @@
           sqlserver:  "{{ sqlserver_port is defined and sqlserver_port.elapsed < 3 }}"
           oracle:     "{{ oracle_port   is defined and oracle_port  .elapsed < 3 }}"
           mongodb:    "{{ mongodb_port  is defined and mongodb_port .elapsed < 3 }}"
-
-    - name: Guardar facts + puertos en JSON
-      copy:
-        content: "{{ ansible_facts
-                     | combine({'inventory_hostname': inventory_hostname})
-                     | combine(puertos_db)            }}"
-        dest: "{{ ruta_json_remoto }}"
