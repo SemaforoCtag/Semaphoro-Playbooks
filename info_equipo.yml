@@ -172,7 +172,7 @@
 
     # ► Credenciales sacadas del entorno exportado por Semaphore
     smb_user: "{{ lookup('env', 'win_user') }}"
-    smb_pass: "{{ lookup('env', 'win_password') }}"
+    smb_pass: "{{ lookup('env', 'win_password_privilegios') }}"
 
   tasks:
     # ───────────────────── DEBUG CREDENCIALES ─────────────────────
