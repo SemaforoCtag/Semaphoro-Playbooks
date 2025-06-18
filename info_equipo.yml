@@ -181,7 +181,7 @@
     txt_file:   "Inventario_Equipos_DMZ.txt"
     smb_share:  "//10.49.1.110/Deploy/Ansible"
     smb_user: "{{ lookup('env', 'win_user') }}"
-    smb_pass: "{{ lookup('env', 'win_password_privile') }}"
+    smb_pass: "{{ lookup('env', 'win_password_privilegios') }}"
     mountpoint: "/mnt/ansible_share"
 
   tasks:
