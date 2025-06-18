@@ -198,6 +198,7 @@
         state: present
 
     - name: Crear punto de montaje local
+      become: true
       file:
         path: "{{ mountpoint }}"
         state: directory
