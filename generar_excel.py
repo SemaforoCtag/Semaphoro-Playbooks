@@ -6,7 +6,7 @@ Genera Inventario_Equipos_DMZ.xlsx y su versión TXT.
 import sys, json, glob, math, re, textwrap
 from datetime import datetime
 from pathlib import Path
-
+import re
 import pandas as pd
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -30,7 +30,7 @@ def pick(d: dict, *keys):
             return d[k]
     return None
 
-# ──────────── fila para el DataFrame ────────────
+# ──────────── fila para el DataFrame, datos del equipo ────────────
 def fila(facts: dict, host_inv: str) -> dict:
     ipdata = pick(facts, "ansible_default_ipv4", "default_ipv4") or {}
     ip       = ipdata.get("address") or host_inv
@@ -69,6 +69,7 @@ def fila(facts: dict, host_inv: str) -> dict:
     disk_free_gb      = round(bytes_avail / 1024**3, 2)
     disk_used_gb      = round(disk_total_mnt_gb - disk_free_gb, 2)
 
+    # puertos de bases de datos 
     db_cols = {
         "MySQL (3306)":      "Activo"  if facts.get("mysql")      else "Inactivo",
         "PostgreSQL (5432)": "Activo"  if facts.get("postgresql") else "Inactivo",
@@ -77,15 +78,67 @@ def fila(facts: dict, host_inv: str) -> dict:
         "MongoDB (27017)":   "Activo"  if facts.get("mongodb")    else "Inactivo",
     }
 
+    # tipo de maquina
     tipo = ("Virtual" if pick(facts, "ansible_virtualization_role",
                               "virtualization_role") == "guest" else "Física")
-
+    
+    #puertos en escucha del equipo
     puertos_txt = ", ".join(map(str, facts.get("listening_ports", [])))
+
+    usuarios_brutos = datos_json.get("usuarios", [])
+    usuarios_limpios = []
+    usuarios_mostrados = []
+    grupos_limpios = []
+
+    modo = None
+    for linea in usuarios_brutos:
+        if "Usuarios del sistema" in linea:
+            modo = "usuarios"
+            continue
+        elif "Grupos del sistema" in linea:
+            modo = "grupos"
+            continue
+
+        if modo == "usuarios":
+            usuarios_limpios.append(linea)
+        elif modo == "grupos":
+            partes = linea.split(":")
+            if len(partes) >= 4:
+                nombre_grupo = partes[0]
+                miembros = partes[3].split(",") if partes[3] else []
+                miembros_limpios = ", ".join(miembros)
+                grupos_limpios.append(f"{nombre_grupo}: {miembros_limpios}")
+            else:
+                grupos_limpios.append(linea)  # en caso de formato no esperado
+
+    # Analizar usuarios para detectar login habilitado
+    for linea in usuarios_limpios:
+        match = re.match(r"(\w+)\s+\(UID:\s*(\d+),\s*GID:\s*(\d+),\s*Shell:\s*(.+)\)", linea)
+        if match:
+            nombre, uid, gid, shell = match.groups()
+            login_habilitado = "Sí" if shell not in ["/usr/sbin/nologin", "/bin/false", "nologin"] else "No"
+            usuarios_mostrados.append(f"{nombre} (UID:{uid}, GID:{gid}) → Login: {login_habilitado}")
+        else:
+            usuarios_mostrados.append(linea)
+
+    # Escribir en el Excel si quieres visualizarlos también
+    if usuarios_mostrados:
+        hoja.cell(row=fila, column=1, value="Usuarios (Login)")
+        for i, user in enumerate(usuarios_mostrados):
+            hoja.cell(row=fila + i + 1, column=1, value=user)
+
+    if grupos_limpios:
+        hoja.cell(row=fila, column=3, value="Grupos")
+        for i, grupo in enumerate(grupos_limpios):
+            hoja.cell(row=fila + i + 1, column=3, value=grupo)
+
 
     return {
         "FechaHora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "IP": ip,
         "Host": hostname,
+        "Usuarios": usuarios_mostrados,
+        "grupos": grupos_limpios,
         "SO": so,
         "CPU": cpu,
         "RAMTot": mem_total_gb,

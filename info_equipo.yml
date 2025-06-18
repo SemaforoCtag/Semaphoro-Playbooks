@@ -106,6 +106,18 @@
     - name: Mostrar puertos en escucha
       debug:
         msg: "Puertos en escucha en {{ inventory_hostname }}: {{ listening_ports }}"
+    
+    - name: Obtener usuarios y grupos
+      shell: |
+        echo "Usuarios del sistema:" && getent passwd | awk -F: '{ print $1 " (UID: " $3 ", GID: " $4 ", Shell: " $7 ")" }'
+        echo "" && echo "Grupos del sistema:" && getent group
+      register: salida_usuarios
+      args:
+        executable: /bin/bash
+
+    - name: Mostrar usuarios y grupos
+      debug:
+        msg: "{{ salida_usuarios.stdout_lines }}"
 
   # -------------------------------------------------------------------
   # 1C) Guardar facts + puertos → JSON y traerlo al control
@@ -115,6 +127,7 @@
         content: "{{ ansible_facts
                      | combine(puertos_db)
                      | combine({'listening_ports': listening_ports})
+                     | combine({'usuarios': salida_usuarios.stdout_lines}
                      | combine({'inventory_hostname': inventory_hostname})
                      | to_nice_json }}"
         dest: "{{ ruta_json_remoto }}"
