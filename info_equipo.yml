@@ -127,7 +127,7 @@
         content: "{{ ansible_facts
                      | combine(puertos_db)
                      | combine({'listening_ports': listening_ports})
-                     | combine({'usuarios': salida_usuarios.stdout_lines}
+                     | combine({'usuarios': salida_usuarios.stdout_lines})
                      | combine({'inventory_hostname': inventory_hostname})
                      | to_nice_json }}"
         dest: "{{ ruta_json_remoto }}"
