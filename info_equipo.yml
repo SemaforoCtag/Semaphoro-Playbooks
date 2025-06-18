@@ -171,56 +171,84 @@
 ################################################################
 # 3. Windows: copiar al share \\srvctdep02\Deploy\Ansible ######
 ################################################################
-- name: Copiar inventario a Ruta de red
-  hosts: Pc_Windows
+- name: Copiar inventario a Ruta de red (directamente desde el nodo de control)
+  hosts: localhost
   gather_facts: no
 
   vars:
-    tmp_dir:    "C:\\Temp"
+    src_dir:    "/home/semaphore/Excels"
     excel_file: "Inventario_Equipos_DMZ.xlsx"
     txt_file:   "Inventario_Equipos_DMZ.txt"
-    src_dir:    "/home/semaphore/Excels"
-
-    smb_share:  "\\\\srvctdep02\\Deploy\\Ansible"
-
-    # ► Credenciales sacadas del entorno exportado por Semaphore
+    smb_share:  "//srvctdep02/Deploy/Ansible"
     smb_user: "{{ lookup('env', 'win_user') }}"
-    smb_pass: "{{ lookup('env', 'win_password_privilegios') }}"
+    smb_pass: "{{ lookup('env', 'win_password_privile') }}"
+    mountpoint: "/mnt/ansible_share"
 
   tasks:
-    # ───────────────────── DEBUG CREDENCIALES ─────────────────────
-    - name: Comprobar que las credenciales llegan desde Semaphore
+    - name: Verificar credenciales
       debug:
         msg: |
-          smb_user   = {{ smb_user }}
-          pass_len   = {{ smb_pass | length }}
+          smb_user = {{ smb_user }}
+          pass_len = {{ smb_pass | length }}
 
-    # 1) Carpeta temporal local
-    - win_file:
-        path: "{{ tmp_dir }}"
+    - name: Asegurarse de que cifs-utils está instalado
+      become: true
+      ansible.builtin.package:
+        name: cifs-utils
+        state: present
+
+    - name: Crear punto de montaje local
+      file:
+        path: "{{ mountpoint }}"
         state: directory
+        mode: "0755"
 
-    # 2) Copiar ficheros desde el nodo de control
-    - win_copy:
-        src: "{{ src_dir }}/{{ excel_file }}"
-        dest: "{{ tmp_dir }}\\{{ excel_file }}"
-
-    - win_copy:
-        src: "{{ src_dir }}/{{ txt_file }}"
-        dest: "{{ tmp_dir }}\\{{ txt_file }}"
-
-    # 3) Mapear el share SMB y copiar
-    - name: Copiar al recurso SMB con tus credenciales
-      win_shell: |
-        $sec  = ConvertTo-SecureString "{{ smb_pass }}" -AsPlainText -Force
-        $cred = New-Object pscredential ("{{ smb_user }}", $sec)
-
-        New-PSDrive -Name Z -PSProvider FileSystem -Root "{{ smb_share }}" `
-                    -Credential $cred -Scope Script -ErrorAction Stop
-
-        Copy-Item "{{ tmp_dir }}\\{{ excel_file }}" -Destination "Z:\" -Force
-        Copy-Item "{{ tmp_dir }}\\{{ txt_file }}"   -Destination "Z:\" -Force
-
-        Remove-PSDrive Z
+    - name: Desmontar si ya está montado
+      become: true
+      shell: |
+        mountpoint -q "{{ mountpoint }}" && umount "{{ mountpoint }}" || true
       args:
-        executable: powershell
+        executable: /bin/bash
+      ignore_errors: true
+
+    - name: Montar recurso compartido SMB
+      become: true
+      shell: |
+        mount -t cifs "{{ smb_share }}" "{{ mountpoint }}" \
+          -o username="{{ smb_user }}",password="{{ smb_pass }}",rw
+      args:
+        executable: /bin/bash
+      register: mount_result
+      failed_when: mount_result.rc != 0
+      ignore_errors: true
+
+    - name: Mostrar error si falla el montaje del recurso SMB
+      fail:
+        msg: "❌ Error al montar el recurso compartido SMB: {{ smb_share }}"
+      when: mount_result.rc != 0
+
+    - name: Copiar archivos al recurso compartido
+      copy:
+        src: "{{ src_dir }}/{{ item }}"
+        dest: "{{ mountpoint }}/{{ item }}"
+        mode: "0644"
+      loop:
+        - "{{ excel_file }}"
+        - "{{ txt_file }}"
+      become: true
+
+    - name: Desmontar recurso SMB
+      become: true
+      shell: umount "{{ mountpoint }}"
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+    - name: ✅ Copia completada correctamente
+      debug:
+        msg: "✅ Archivos copiados correctamente al recurso SMB: {{ smb_share }}"
+
+
+
+
+
