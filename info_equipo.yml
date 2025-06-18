@@ -180,8 +180,8 @@
     excel_file: "Inventario_Equipos_DMZ.xlsx"
     txt_file:   "Inventario_Equipos_DMZ.txt"
     smb_share:  "//10.49.1.110/Deploy/Ansible"
-    smb_user:   "CTAG\\userans"
-    smb_pass:   "9yXJOWFS4.w4QO3An9hw0"
+    smb_user: "{{ lookup('env', 'win_user') }}"
+    smb_pass: "{{ lookup('env', 'win_password_privile') }}"
     mountpoint: "/mnt/ansible_share"
     cred_file:  "/tmp/smb_credentials"
 
