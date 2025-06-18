@@ -109,9 +109,8 @@ def fila(facts: dict, host_inv: str) -> dict:
                 miembros_limpios = ", ".join(miembros)
                 grupos_limpios.append(f"{nombre_grupo}: {miembros_limpios}")
             else:
-                grupos_limpios.append(linea)  # en caso de formato no esperado
+                grupos_limpios.append(linea)
 
-    # Analizar usuarios para detectar login habilitado
     for linea in usuarios_limpios:
         match = re.match(r"(\w+)\s+\(UID:\s*(\d+),\s*GID:\s*(\d+),\s*Shell:\s*(.+)\)", linea)
         if match:
@@ -120,17 +119,6 @@ def fila(facts: dict, host_inv: str) -> dict:
             usuarios_mostrados.append(f"{nombre} (UID:{uid}, GID:{gid}) → Login: {login_habilitado}")
         else:
             usuarios_mostrados.append(linea)
-
-    # Escribir en el Excel si quieres visualizarlos también
-    if usuarios_mostrados:
-        hoja.cell(row=fila, column=1, value="Usuarios (Login)")
-        for i, user in enumerate(usuarios_mostrados):
-            hoja.cell(row=fila + i + 1, column=1, value=user)
-
-    if grupos_limpios:
-        hoja.cell(row=fila, column=3, value="Grupos")
-        for i, grupo in enumerate(grupos_limpios):
-            hoja.cell(row=fila + i + 1, column=3, value=grupo)
 
 
     return {
