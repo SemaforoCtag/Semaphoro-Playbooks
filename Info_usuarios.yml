@@ -1,6 +1,6 @@
 ---
 - name: Mostrar usuarios y permisos en Linux y Windows
-  hosts: all
+  hosts: semaforos
   gather_facts: yes
   become: true
 
