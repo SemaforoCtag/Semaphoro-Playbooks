@@ -171,7 +171,7 @@
 ################################################################
 # 3. Windows: copiar al share \\srvctdep02\Deploy\Ansible ######
 ################################################################
-- name: Copiar inventario a Ruta de red (montaje seguro)
+- name: Copiar inventario a Ruta de red (ya montada en el sistema)
   hosts: localhost
   gather_facts: no
 
@@ -179,52 +179,20 @@
     src_dir:    "/home/semaphore/Excels"
     excel_file: "Inventario_Equipos_DMZ.xlsx"
     txt_file:   "Inventario_Equipos_DMZ.txt"
-    smb_share:  "//10.49.1.110/Deploy/Ansible"
-    smb_user: "{{ lookup('env', 'win_user') }}"
-    smb_pass: "{{ lookup('env', 'win_password_privile') }}"
     mountpoint: "/mnt/ansible_share"
-    cred_file:  "/tmp/smb_credentials"
 
   tasks:
-    - name: Crear punto de montaje local
-      become: true
-      file:
+    - name: Verificar que el recurso ya está montado
+      stat:
         path: "{{ mountpoint }}"
-        state: directory
-        mode: "0755"
+      register: mount_status
 
-    - name: Crear archivo temporal con credenciales SMB
-      become: true
-      copy:
-        dest: "{{ cred_file }}"
-        content: |
-          username={{ smb_user }}
-          password={{ smb_pass }}
-        mode: "0600"
-
-    - name: Desmontar si ya está montado (por si quedó algo colgado)
-      become: true
-      shell: umount -f "{{ mountpoint }}"
-      args:
-        executable: /bin/bash
-      ignore_errors: yes
-
-    - name: Montar recurso compartido SMB usando archivo de credenciales
-      become: true
-      shell: |
-        mount -t cifs "{{ smb_share }}" "{{ mountpoint }}" -o credentials={{ cred_file }},rw
-      args:
-        executable: /bin/bash
-      register: resultado_montaje
-      failed_when: resultado_montaje.rc != 0
-      ignore_errors: yes
-
-    - name: Mostrar error si falla el montaje del recurso SMB
+    - name: Fallar si no está montado
       fail:
-        msg: "❌ Error al montar el recurso compartido SMB: {{ smb_share }}"
-      when: resultado_montaje.rc != 0
+        msg: "❌ El recurso {{ mountpoint }} no está montado. Monta primero la carpeta en el sistema."
+      when: not mount_status.stat.exists
 
-    - name: Copiar archivos al recurso compartido montado
+    - name: Copiar archivos al recurso compartido ya montado
       become: true
       copy:
         src: "{{ src_dir }}/{{ item }}"
@@ -234,22 +202,9 @@
         - "{{ excel_file }}"
         - "{{ txt_file }}"
 
-    - name: Desmontar recurso SMB
-      become: true
-      shell: umount "{{ mountpoint }}"
-      args:
-        executable: /bin/bash
-      ignore_errors: yes
-
-    - name: Eliminar archivo temporal de credenciales
-      become: true
-      file:
-        path: "{{ cred_file }}"
-        state: absent
-
     - name: ✅ Mensaje final de éxito
       debug:
-        msg: "✅ Archivos copiados correctamente a {{ smb_share }}"
+        msg: "✅ Archivos copiados correctamente a {{ mountpoint }}"
 
 
 
