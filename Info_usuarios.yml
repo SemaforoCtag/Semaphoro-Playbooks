@@ -1,0 +1,41 @@
+---
+- name: Mostrar usuarios y permisos en Linux y Windows
+  hosts: all
+  gather_facts: yes
+  become: true
+
+  tasks:
+
+    - name: Detectar si el sistema es Windows
+      set_fact:
+        es_windows: "{{ ansible_os_family == 'Windows' }}"
+
+    - name: Obtener usuarios y grupos en Linux
+      when: not es_windows
+      shell: |
+        echo "Usuarios del sistema:"
+        getent passwd | awk -F: '{ print $1 " (UID: " $3 ", GID: " $4 ", Shell: " $7 ")" }'
+        echo ""
+        echo "Grupos del sistema:"
+        getent group
+      register: salida_linux
+      args:
+        executable: /bin/bash
+
+    - name: Mostrar resultado Linux en consola
+      when: not es_windows
+      debug:
+        msg: "{{ salida_linux.stdout_lines }}"
+
+    - name: Obtener usuarios y grupos en Windows
+      when: es_windows
+      win_shell: |
+        $usuarios = Get-LocalUser | Select-Object Name,Enabled,LastLogon | Out-String
+        $grupos = Get-LocalGroupMember -Group "Administrators" | Select-Object Name, ObjectClass | Out-String
+        "Usuarios locales:`n$usuarios`nMiembros del grupo Administradores:`n$grupos"
+      register: salida_windows
+
+    - name: Mostrar resultado Windows en consola
+      when: es_windows
+      debug:
+        msg: "{{ salida_windows.stdout_lines }}"
