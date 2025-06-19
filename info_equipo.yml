@@ -156,7 +156,7 @@
         src: "./generar_excel.py"
         dest: "{{ script_python }}"
         mode: "0755"
-        force: false
+        force: true
 
     - name: Ejecutar script para generar el Excel
       command: >
