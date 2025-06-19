@@ -3,14 +3,13 @@
 Genera Inventario_Equipos_DMZ.xlsx y su versión TXT.
 """
 
-import sys, json, glob, math, re, textwrap
+import sys, json, glob, math, re
 from datetime import datetime
 from pathlib import Path
-import re
 import pandas as pd
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
-from tabulate import tabulate          # asegúrate de tener python3-tabulate instalado
+from tabulate import tabulate
 
 # ───────────────────────── utilidades ──────────────────────────
 def parse_size(size_str: str) -> float:
@@ -78,11 +77,7 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
         "MongoDB (27017)":   "Activo"  if facts.get("mongodb")    else "Inactivo",
     }
 
-    # tipo de maquina
-    tipo = ("Virtual" if pick(facts, "ansible_virtualization_role",
-                              "virtualization_role") == "guest" else "Física")
-    
-    #puertos en escucha del equipo
+    tipo = "Virtual" if pick(facts, "ansible_virtualization_role", "virtualization_role") == "guest" else "Física"
     puertos_txt = ", ".join(map(str, facts.get("listening_ports", [])))
 
     usuarios_brutos = datos_json.get("usuarios", [])
@@ -120,7 +115,6 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
         else:
             usuarios_mostrados.append(linea)
 
-
     return {
         "FechaHora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "IP": ip,
@@ -135,7 +129,7 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
         "Tipo": tipo,
         "Puertos": puertos_txt,
         **db_cols,
-        "Kernel": kernel,             # quedan al final en Excel
+        "Kernel": kernel,
         "Arch": arch,
         "RAMFree": mem_free_gb,
         "DSKU": disk_used_gb,
@@ -167,28 +161,22 @@ def main():
             hoja.column_dimensions[get_column_letter(i)].width = ancho
         n_filas, n_cols = df.shape
         ultima_col = get_column_letter(n_cols)
-        tabla = Table(displayName="InventarioDMZ",
-                      ref=f"A1:{ultima_col}{n_filas+1}")
-        tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9",
-                                              showRowStripes=True)
+        tabla = Table(displayName="InventarioDMZ", ref=f"A1:{ultima_col}{n_filas+1}")
+        tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
         hoja.add_table(tabla)
 
     # ---------- TXT ----------
     txt_path = Path(salida).with_suffix(".txt")
-
-    # ▹ Elegimos columnas clave para la salida consola
     cols_txt = ["FechaHora", "IP", "Host", "SO", "CPU", "RAMTot", "Puertos",
                 "MySQL (3306)", "PostgreSQL (5432)", "SQLServer (1433)"]
     df_txt = df[cols_txt].copy()
 
-    # ▹ Resumir la lista de puertos
     def resume_puertos(p):
         lst = [x.strip() for x in p.split(",")] if p else []
         return ", ".join(lst[:5]) + (f", +{len(lst)-5}" if len(lst) > 5 else "")
     df_txt["Puertos"] = df_txt["Puertos"].apply(resume_puertos)
 
-    tabla_ascii = tabulate(df_txt, headers="keys",
-                           tablefmt="pretty", showindex=False)
+    tabla_ascii = tabulate(df_txt, headers="keys", tablefmt="pretty", showindex=False)
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write(tabla_ascii + "\n")
 
