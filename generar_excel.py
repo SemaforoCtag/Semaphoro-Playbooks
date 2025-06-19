@@ -107,7 +107,7 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
                 grupos_limpios.append(linea)
 
     for linea in usuarios_limpios:
-        match = re.match(r"(\w+)\s+\(UID:\s*(\d+),\s*GID:\s*(\d+),\s*Shell:\s*(.+)\)", linea)
+        match = re.match(r"([\w\-]+)\s+\(UID:\s*(\d+),\s*GID:\s*(\d+),\s*Shell:\s*(.*?)\)", linea)
         if match:
             nombre, uid, gid, shell = match.groups()
             login_habilitado = "Sí" if shell not in ["/usr/sbin/nologin", "/bin/false", "nologin"] else "No"
