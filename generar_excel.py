@@ -160,7 +160,7 @@ def main():
         with open(path, "r") as f:
             info = json.load(f)
         facts = info.get("ansible_facts", info)
-        filas.append(fila(facts, info.get("inventory_hostname", "desconocido"), info))
+        filas.extend(fila(facts, info.get("inventory_hostname", "desconocido"), info))
 
     df = pd.DataFrame(filas).sort_values("IP")
 
