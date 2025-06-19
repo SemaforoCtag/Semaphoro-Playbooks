@@ -82,7 +82,7 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
 
     usuarios_brutos = datos_json.get("usuarios", [])
     usuarios_limpios = []
-    usuarios_mostrados = []
+    usuarios_estructurados = []
     grupos_limpios = []
 
     modo = None
@@ -111,30 +111,42 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
         if match:
             nombre, uid, gid, shell = match.groups()
             login_habilitado = "Sí" if shell not in ["/usr/sbin/nologin", "/bin/false", "nologin"] else "No"
-            usuarios_mostrados.append(f"{nombre} (UID:{uid}, GID:{gid}) → Login: {login_habilitado}")
+            usuarios_estructurados.append({
+            "Usuario": nombre,
+            "UID": uid,
+            "GID": gid,
+            "Login": login_habilitado
+        })
         else:
-            usuarios_mostrados.append(linea)
+            usuarios_estructurados.append(linea)
 
-    return {
-        "FechaHora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "IP": ip,
-        "Host": hostname,
-        "Usuarios": usuarios_mostrados,
-        "grupos": grupos_limpios,
-        "SO": so,
-        "CPU": cpu,
-        "RAMTot": mem_total_gb,
-        "RAMUsed": mem_used_gb,
-        "DSKT": disk_total_gb,
-        "Tipo": tipo,
-        "Puertos": puertos_txt,
-        **db_cols,
-        "Kernel": kernel,
-        "Arch": arch,
-        "RAMFree": mem_free_gb,
-        "DSKU": disk_used_gb,
-        "DSKF": disk_free_gb,
-    }
+    filas_por_equipo = []
+    for usuario in usuarios_estructurados:
+        filas_por_equipo.append({
+            "FechaHora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "IP": ip,
+            "Host": hostname,
+            "Usuario": usuario["Usuario"],
+            "UID": usuario["UID"],
+            "GID": usuario["GID"],
+            "Login": usuario["Login"],
+            "grupos": grupos_limpios,
+            "SO": so,
+            "CPU": cpu,
+            "RAMTot": mem_total_gb,
+            "RAMUsed": mem_used_gb,
+            "DSKT": disk_total_gb,
+            "Tipo": tipo,
+            "Puertos": puertos_txt,
+            **db_cols,
+            "Kernel": kernel,
+            "Arch": arch,
+            "RAMFree": mem_free_gb,
+            "DSKU": disk_used_gb,
+            "DSKF": disk_free_gb,
+        })
+    return filas_por_equipo
+
 
 # ─────────────────────────── main ────────────────────────────
 def main():
