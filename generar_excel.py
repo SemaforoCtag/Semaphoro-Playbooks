@@ -11,7 +11,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from tabulate import tabulate
 
-# ───────────────────────── utilidades ──────────────────────────
+# ─── Utilidades ───
+
 def parse_size(size_str: str) -> float:
     m = re.match(r"([\d.]+)\s*(GB|MB|TB)", size_str or "")
     if not m:
@@ -29,34 +30,33 @@ def pick(d: dict, *keys):
             return d[k]
     return None
 
-# ──────────── fila para el DataFrame, datos del equipo ────────────
-def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
+# ─── Fila para DataFrame ───
+
+def fila(facts: dict, host_inv: str, datos_json: dict) -> list:
     ipdata = pick(facts, "ansible_default_ipv4", "default_ipv4") or {}
-    ip       = ipdata.get("address") or host_inv
+    ip = ipdata.get("address") or host_inv
     hostname = pick(facts, "ansible_hostname", "hostname", "fqdn") or host_inv
 
     distro = pick(facts, "ansible_distribution", "distribution") or ""
-    d_ver  = pick(facts, "ansible_distribution_version", "distribution_version") or ""
-    so     = f"{distro} {d_ver}".strip()
+    d_ver = pick(facts, "ansible_distribution_version", "distribution_version") or ""
+    so = f"{distro} {d_ver}".strip()
 
     kernel = pick(facts, "ansible_kernel", "kernel") or ""
-    arch   = pick(facts, "ansible_architecture", "architecture", "machine") or ""
+    arch = pick(facts, "ansible_architecture", "architecture", "machine") or ""
 
     cpu_lst = pick(facts, "ansible_processor", "processor") or []
     cpu = cpu_lst[2] if len(cpu_lst) > 2 else cpu_lst[-1] if cpu_lst else ""
 
     mem_total_mb = pick(facts, "ansible_memtotal_mb", "memtotal_mb") or 0
-    mem_free_mb  = pick(facts, "ansible_memfree_mb", "memfree_mb",
-                        ["ansible_memory_mb", "memory_mb"]) or 0
+    mem_free_mb = pick(facts, "ansible_memfree_mb", "memfree_mb", ["ansible_memory_mb", "memory_mb"]) or 0
     if isinstance(mem_free_mb, dict):
         mem_free_mb = mem_free_mb.get("real", {}).get("free", 0)
     mem_total_gb = math.ceil(mem_total_mb / 1024)
-    mem_free_gb  = math.ceil(mem_free_mb / 1024)
-    mem_used_gb  = mem_total_gb - mem_free_gb
+    mem_free_gb = math.ceil(mem_free_mb / 1024)
+    mem_used_gb = mem_total_gb - mem_free_gb
 
     devs = pick(facts, "ansible_devices", "devices") or {}
-    disk_total_gb = sum(parse_size(d.get("size", "0 GB"))
-                        for n, d in devs.items() if n.startswith(("sd", "nvme")))
+    disk_total_gb = sum(parse_size(d.get("size", "0 GB")) for n, d in devs.items() if n.startswith(("sd", "nvme")))
     mounts = pick(facts, "ansible_mounts", "mounts") or []
     bytes_total = bytes_avail = 0
     for m in mounts:
@@ -65,16 +65,15 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
         bytes_total += m.get("size_total", 0)
         bytes_avail += m.get("size_available", 0)
     disk_total_mnt_gb = round(bytes_total / 1024**3, 2)
-    disk_free_gb      = round(bytes_avail / 1024**3, 2)
-    disk_used_gb      = round(disk_total_mnt_gb - disk_free_gb, 2)
+    disk_free_gb = round(bytes_avail / 1024**3, 2)
+    disk_used_gb = round(disk_total_mnt_gb - disk_free_gb, 2)
 
-    # puertos de bases de datos 
     db_cols = {
-        "MySQL (3306)":      "Activo"  if facts.get("mysql")      else "Inactivo",
-        "PostgreSQL (5432)": "Activo"  if facts.get("postgresql") else "Inactivo",
-        "SQLServer (1433)":  "Activo"  if facts.get("sqlserver")  else "Inactivo",
-        "Oracle (1521)":     "Activo"  if facts.get("oracle")     else "Inactivo",
-        "MongoDB (27017)":   "Activo"  if facts.get("mongodb")    else "Inactivo",
+        "MySQL (3306)": "Activo" if facts.get("mysql") else "Inactivo",
+        "PostgreSQL (5432)": "Activo" if facts.get("postgresql") else "Inactivo",
+        "SQLServer (1433)": "Activo" if facts.get("sqlserver") else "Inactivo",
+        "Oracle (1521)": "Activo" if facts.get("oracle") else "Inactivo",
+        "MongoDB (27017)": "Activo" if facts.get("mongodb") else "Inactivo",
     }
 
     tipo = "Virtual" if pick(facts, "ansible_virtualization_role", "virtualization_role") == "guest" else "Física"
@@ -112,13 +111,11 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
             nombre, uid, gid, shell = match.groups()
             login_habilitado = "Sí" if shell not in ["/usr/sbin/nologin", "/bin/false", "nologin"] else "No"
             usuarios_estructurados.append({
-            "Usuario": nombre,
-            "UID": uid,
-            "GID": gid,
-            "Login": login_habilitado
-        })
-        else:
-            usuarios_estructurados.append(linea)
+                "Usuario": nombre,
+                "UID": uid,
+                "GID": gid,
+                "Login": login_habilitado
+            })
 
     filas_por_equipo = []
     for usuario in usuarios_estructurados:
@@ -147,8 +144,8 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
         })
     return filas_por_equipo
 
+# ─── Main ───
 
-# ─────────────────────────── main ────────────────────────────
 def main():
     if len(sys.argv) < 3:
         sys.exit("Uso: generar_excel.py <salida.xlsx> <glob_json>")
@@ -164,7 +161,6 @@ def main():
 
     df = pd.DataFrame(filas).sort_values("IP")
 
-    # ---------- EXCEL ----------
     with pd.ExcelWriter(salida, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="Inventario DMZ", index=False)
         hoja = writer.sheets["Inventario DMZ"]
@@ -177,7 +173,6 @@ def main():
         tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
         hoja.add_table(tabla)
 
-    # ---------- TXT ----------
     txt_path = Path(salida).with_suffix(".txt")
     cols_txt = ["FechaHora", "IP", "Host", "SO", "CPU", "RAMTot", "Puertos",
                 "MySQL (3306)", "PostgreSQL (5432)", "SQLServer (1433)"]
