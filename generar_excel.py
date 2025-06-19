@@ -31,7 +31,7 @@ def pick(d: dict, *keys):
     return None
 
 # ──────────── fila para el DataFrame, datos del equipo ────────────
-def fila(facts: dict, host_inv: str) -> dict:
+def fila(facts: dict, host_inv: str, datos_json: dict) -> dict:
     ipdata = pick(facts, "ansible_default_ipv4", "default_ipv4") or {}
     ip       = ipdata.get("address") or host_inv
     hostname = pick(facts, "ansible_hostname", "hostname", "fqdn") or host_inv
@@ -154,7 +154,7 @@ def main():
         with open(path, "r") as f:
             info = json.load(f)
         facts = info.get("ansible_facts", info)
-        filas.append(fila(facts, info.get("inventory_hostname", "desconocido")))
+        filas.append(fila(facts, info.get("inventory_hostname", "desconocido"), info))
 
     df = pd.DataFrame(filas).sort_values("IP")
 
