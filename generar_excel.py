@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Genera Inventario_Equipos_DMZ.xlsx y su versión TXT.
+Genera Inventario_Equipos_DMZ.xlsx, resumen .txt y usuarios_equipos.txt
 """
 import sys, json, glob, math, re
 from datetime import datetime
@@ -9,8 +9,6 @@ import pandas as pd
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from tabulate import tabulate
-
-# Utilidades
 
 def parse_size(size_str: str) -> float:
     m = re.match(r"([\d.]+)\s*(GB|MB|TB)", size_str or "")
@@ -85,8 +83,7 @@ def fila_equipo(facts: dict, host_inv: str) -> dict:
 
 def extraer_usuarios_grupos(datos_json: dict):
     usuarios_brutos = datos_json.get("usuarios", [])
-    usuarios = []
-    grupos = []
+    usuarios, grupos = [], []
     modo = None
 
     for linea in usuarios_brutos:
@@ -118,7 +115,8 @@ def main():
 
     salida_excel, patron = sys.argv[1], sys.argv[2]
     filas_excel = []
-    contenido_txt = []
+    contenido_resumen = []
+    contenido_usuarios = []
 
     for path in glob.glob(patron):
         with open(path, "r") as f:
@@ -130,12 +128,22 @@ def main():
 
         usuarios, grupos = extraer_usuarios_grupos(info)
 
-        contenido_txt.append(f"=== {fila['Host']} ({fila['IP']}) ===\n")
-        contenido_txt.append(tabulate(usuarios, headers="keys", tablefmt="pretty", showindex=False))
-        contenido_txt.append("\n")
-        contenido_txt.append(tabulate(grupos, headers="keys", tablefmt="pretty", showindex=False))
-        contenido_txt.append("\n\n")
+        # TXT RESUMEN
+        resumen = {
+            "Host": fila["Host"], "IP": fila["IP"], "SO": fila["SO"], "CPU": fila["CPU"],
+            "RAM": fila["RAMTot"], "Puertos": fila["Puertos"]
+        }
+        contenido_resumen.append(resumen)
 
+        # TXT USUARIOS
+        contenido_usuarios.append(f"\n=== {fila['Host']} ({fila['IP']}) ===\n")
+        if usuarios:
+            contenido_usuarios.append(tabulate(usuarios, headers="keys", tablefmt="pretty", showindex=False))
+        if grupos:
+            contenido_usuarios.append(tabulate(grupos, headers="keys", tablefmt="pretty", showindex=False))
+        contenido_usuarios.append("\n")
+
+    # Guardar Excel
     df = pd.DataFrame(filas_excel).sort_values("IP")
     with pd.ExcelWriter(salida_excel, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="Inventario DMZ", index=False)
@@ -149,12 +157,19 @@ def main():
         tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
         hoja.add_table(tabla)
 
-    txt_path = Path(str(salida_excel).replace(".xlsx", "_usuarios.txt"))
-    with open(txt_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(contenido_txt))
+    # Guardar TXT resumen
+    txt_resumen_path = Path(salida_excel).with_suffix(".txt")
+    with open(txt_resumen_path, "w", encoding="utf-8") as f:
+        f.write(tabulate(contenido_resumen, headers="keys", tablefmt="pretty", showindex=False))
 
-    print(f"✅ Excel generado → {salida_excel}")
-    print(f"✅ TXT generado   → {txt_path}")
+    # Guardar TXT usuarios
+    txt_usuarios_path = Path(salida_excel).with_name("usuarios_equipos.txt")
+    with open(txt_usuarios_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(contenido_usuarios))
+
+    print(f"✅ Excel generado        → {salida_excel}")
+    print(f"✅ TXT resumen generado  → {txt_resumen_path}")
+    print(f"✅ TXT usuarios generado → {txt_usuarios_path}")
 
 if __name__ == "__main__":
     main()
