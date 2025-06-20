@@ -149,7 +149,7 @@ def main():
         tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
         hoja.add_table(tabla)
 
-    txt_path = Path(salida_excel).with_suffix("_usuarios.txt")
+    txt_path = Path(str(salida_excel).replace(".xlsx", "_usuarios.txt"))
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write("\n".join(contenido_txt))
 
