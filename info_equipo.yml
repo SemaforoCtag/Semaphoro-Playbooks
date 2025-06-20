@@ -149,6 +149,7 @@
     ruta_json_ctl: "/home/semaphore/Excels"
     script_python: "/home/semaphore/Excels/generar_excel.py"
     ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    
 
   tasks:
     - name: Copiar / actualizar script Python
@@ -179,6 +180,7 @@
     src_dir:    "/home/semaphore/Excels"
     excel_file: "Inventario_Equipos_DMZ.xlsx"
     txt_file:   "Inventario_Equipos_DMZ.txt"
+    usuarios_txt_file: "usuarios_equipos.txt"
     mountpoint: "/mnt/ansible_share"
 
   tasks:
@@ -201,6 +203,7 @@
       loop:
         - "{{ excel_file }}"
         - "{{ txt_file }}"
+        - "{{ usuarios_txt_file }}"
 
     - name: ✅ Mensaje final de éxito
       debug:
