@@ -2,7 +2,6 @@
 """
 Genera Inventario_Equipos_DMZ.xlsx y su versión TXT.
 """
-
 import sys, json, glob, math, re
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +10,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from tabulate import tabulate
 
-# ─── Utilidades ───
+# Utilidades
 
 def parse_size(size_str: str) -> float:
     m = re.match(r"([\d.]+)\s*(GB|MB|TB)", size_str or "")
@@ -30,9 +29,7 @@ def pick(d: dict, *keys):
             return d[k]
     return None
 
-# ─── Fila para DataFrame ───
-
-def fila(facts: dict, host_inv: str, datos_json: dict) -> list:
+def fila_equipo(facts: dict, host_inv: str) -> dict:
     ipdata = pick(facts, "ansible_default_ipv4", "default_ipv4") or {}
     ip = ipdata.get("address") or host_inv
     hostname = pick(facts, "ansible_hostname", "hostname", "fqdn") or host_inv
@@ -57,16 +54,9 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> list:
 
     devs = pick(facts, "ansible_devices", "devices") or {}
     disk_total_gb = sum(parse_size(d.get("size", "0 GB")) for n, d in devs.items() if n.startswith(("sd", "nvme")))
-    mounts = pick(facts, "ansible_mounts", "mounts") or []
-    bytes_total = bytes_avail = 0
-    for m in mounts:
-        if not m.get("device", "").startswith(("/dev/sd", "/dev/nvme")):
-            continue
-        bytes_total += m.get("size_total", 0)
-        bytes_avail += m.get("size_available", 0)
-    disk_total_mnt_gb = round(bytes_total / 1024**3, 2)
-    disk_free_gb = round(bytes_avail / 1024**3, 2)
-    disk_used_gb = round(disk_total_mnt_gb - disk_free_gb, 2)
+
+    tipo = "Virtual" if pick(facts, "ansible_virtualization_role", "virtualization_role") == "guest" else "Física"
+    puertos_txt = ", ".join(map(str, facts.get("listening_ports", [])))
 
     db_cols = {
         "MySQL (3306)": "Activo" if facts.get("mysql") else "Inactivo",
@@ -76,15 +66,29 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> list:
         "MongoDB (27017)": "Activo" if facts.get("mongodb") else "Inactivo",
     }
 
-    tipo = "Virtual" if pick(facts, "ansible_virtualization_role", "virtualization_role") == "guest" else "Física"
-    puertos_txt = ", ".join(map(str, facts.get("listening_ports", [])))
+    return {
+        "FechaHora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "IP": ip,
+        "Host": hostname,
+        "SO": so,
+        "CPU": cpu,
+        "RAMTot": mem_total_gb,
+        "RAMUsed": mem_used_gb,
+        "DSKT": disk_total_gb,
+        "Tipo": tipo,
+        "Puertos": puertos_txt,
+        **db_cols,
+        "Kernel": kernel,
+        "Arch": arch,
+        "RAMFree": mem_free_gb,
+    }
 
+def extraer_usuarios_grupos(datos_json: dict):
     usuarios_brutos = datos_json.get("usuarios", [])
-    usuarios_limpios = []
-    usuarios_estructurados = []
-    grupos_limpios = []
-
+    usuarios = []
+    grupos = []
     modo = None
+
     for linea in usuarios_brutos:
         if "Usuarios del sistema" in linea:
             modo = "usuarios"
@@ -94,74 +98,46 @@ def fila(facts: dict, host_inv: str, datos_json: dict) -> list:
             continue
 
         if modo == "usuarios":
-            usuarios_limpios.append(linea)
+            match = re.match(r"([\w\-]+)\s+\(UID:\s*(\d+),\s*GID:\s*(\d+),\s*Shell:\s*(.*?)\)", linea)
+            if match:
+                nombre, uid, gid, shell = match.groups()
+                login = "Sí" if shell not in ["/usr/sbin/nologin", "/bin/false", "nologin"] else "No"
+                usuarios.append({"Usuario": nombre, "UID": uid, "GID": gid, "Login": login})
         elif modo == "grupos":
             partes = linea.split(":")
             if len(partes) >= 4:
-                nombre_grupo = partes[0]
+                grupo = partes[0]
                 miembros = partes[3].split(",") if partes[3] else []
-                miembros_limpios = ", ".join(miembros)
-                grupos_limpios.append(f"{nombre_grupo}: {miembros_limpios}")
-            else:
-                grupos_limpios.append(linea)
+                grupos.append({"Grupo": grupo, "Miembros": ", ".join([m.strip() for m in miembros if m])})
 
-    for linea in usuarios_limpios:
-        match = re.match(r"([\w\-]+)\s+\(UID:\s*(\d+),\s*GID:\s*(\d+),\s*Shell:\s*(.*?)\)", linea)
-        if match:
-            nombre, uid, gid, shell = match.groups()
-            login_habilitado = "Sí" if shell not in ["/usr/sbin/nologin", "/bin/false", "nologin"] else "No"
-            usuarios_estructurados.append({
-                "Usuario": nombre,
-                "UID": uid,
-                "GID": gid,
-                "Login": login_habilitado
-            })
-
-    filas_por_equipo = []
-    for usuario in usuarios_estructurados:
-        filas_por_equipo.append({
-            "FechaHora": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "IP": ip,
-            "Host": hostname,
-            "Usuario": usuario["Usuario"],
-            "UID": usuario["UID"],
-            "GID": usuario["GID"],
-            "Login": usuario["Login"],
-            "grupos": grupos_limpios,
-            "SO": so,
-            "CPU": cpu,
-            "RAMTot": mem_total_gb,
-            "RAMUsed": mem_used_gb,
-            "DSKT": disk_total_gb,
-            "Tipo": tipo,
-            "Puertos": puertos_txt,
-            **db_cols,
-            "Kernel": kernel,
-            "Arch": arch,
-            "RAMFree": mem_free_gb,
-            "DSKU": disk_used_gb,
-            "DSKF": disk_free_gb,
-        })
-    return filas_por_equipo
-
-# ─── Main ───
+    return usuarios, grupos
 
 def main():
     if len(sys.argv) < 3:
         sys.exit("Uso: generar_excel.py <salida.xlsx> <glob_json>")
 
-    salida, patron = sys.argv[1], sys.argv[2]
-    filas = []
+    salida_excel, patron = sys.argv[1], sys.argv[2]
+    filas_excel = []
+    contenido_txt = []
 
     for path in glob.glob(patron):
         with open(path, "r") as f:
             info = json.load(f)
         facts = info.get("ansible_facts", info)
-        filas.extend(fila(facts, info.get("inventory_hostname", "desconocido"), info))
 
-    df = pd.DataFrame(filas).sort_values("IP")
+        fila = fila_equipo(facts, info.get("inventory_hostname", "desconocido"))
+        filas_excel.append(fila)
 
-    with pd.ExcelWriter(salida, engine="openpyxl") as writer:
+        usuarios, grupos = extraer_usuarios_grupos(info)
+
+        contenido_txt.append(f"=== {fila['Host']} ({fila['IP']}) ===\n")
+        contenido_txt.append(tabulate(usuarios, headers="keys", tablefmt="pretty", showindex=False))
+        contenido_txt.append("\n")
+        contenido_txt.append(tabulate(grupos, headers="keys", tablefmt="pretty", showindex=False))
+        contenido_txt.append("\n\n")
+
+    df = pd.DataFrame(filas_excel).sort_values("IP")
+    with pd.ExcelWriter(salida_excel, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="Inventario DMZ", index=False)
         hoja = writer.sheets["Inventario DMZ"]
         for i, col in enumerate(df.columns, 1):
@@ -173,22 +149,12 @@ def main():
         tabla.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
         hoja.add_table(tabla)
 
-    txt_path = Path(salida).with_suffix(".txt")
-    cols_txt = ["FechaHora", "IP", "Host", "SO", "CPU", "RAMTot", "Puertos",
-                "MySQL (3306)", "PostgreSQL (5432)", "SQLServer (1433)"]
-    df_txt = df[cols_txt].copy()
-
-    def resume_puertos(p):
-        lst = [x.strip() for x in p.split(",")] if p else []
-        return ", ".join(lst[:5]) + (f", +{len(lst)-5}" if len(lst) > 5 else "")
-    df_txt["Puertos"] = df_txt["Puertos"].apply(resume_puertos)
-
-    tabla_ascii = tabulate(df_txt, headers="keys", tablefmt="pretty", showindex=False)
+    txt_path = Path(salida_excel).with_suffix("_usuarios.txt")
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(tabla_ascii + "\n")
+        f.write("\n".join(contenido_txt))
 
-    print(f"✅ Excel generado → {salida}")
-    print(f"✅ TXT   generado → {txt_path}")
+    print(f"✅ Excel generado → {salida_excel}")
+    print(f"✅ TXT generado   → {txt_path}")
 
 if __name__ == "__main__":
     main()
