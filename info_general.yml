@@ -5,15 +5,12 @@
 - name: Recoger facts y escanear puertos
   hosts: semaforos
   gather_facts: yes
-  become: true                                      # escribir /tmp y usar ss
+  become: true
 
   vars:
     ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
     ruta_json_ctl:    "/home/semaphore/Excels"
 
-  # -------------------------------------------------------------------
-  # PRE  : crear la carpeta local solo una vez
-  # -------------------------------------------------------------------
   pre_tasks:
     - name: Crear carpeta local para los JSON
       file:
@@ -25,10 +22,8 @@
       become: false
 
   tasks:
-  # -------------------------------------------------------------------
-  # 1A) Escaneo rápido de PUERTOS de bases de datos (método wait_for)
-  # -------------------------------------------------------------------
-    - name: Verificar MySQL (3306)      # todas estas tareas siguen igual
+    # 1A) Escaneo rápido de PUERTOS de bases de datos (método wait_for)
+    - name: Verificar MySQL (3306)
       wait_for:
         host: "{{ inventory_hostname }}"
         port: 3306
@@ -77,15 +72,13 @@
           oracle:     "{{ oracle_port   is defined and oracle_port.elapsed    < 3 }}"
           mongodb:    "{{ mongodb_port  is defined and mongodb_port.elapsed   < 3 }}"
 
-  # -------------------------------------------------------------------
-  # 1B) NUEVO: listar TODOS los puertos TCP/UDP en escucha con ss/netstat
-  # -------------------------------------------------------------------
+    # 1B) Listar TODOS los puertos TCP/UDP en escucha con ss/netstat
     - name: Obtener puertos TCP/UDP en escucha (ss)
       shell: |
         ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
       register: listening_ports_cmd
       changed_when: false
-      failed_when: false        # por si ss no existe
+      failed_when: false
 
     - name: (Fallback) Obtener puertos de netstat si ss no está disponible
       shell: |
@@ -106,7 +99,7 @@
     - name: Mostrar puertos en escucha
       debug:
         msg: "Puertos en escucha en {{ inventory_hostname }}: {{ listening_ports }}"
-    
+
     - name: Obtener usuarios y grupos
       shell: |
         echo "Usuarios del sistema:" && getent passwd | awk -F: '{ print $1 " (UID: " $3 ", GID: " $4 ", Shell: " $7 ")" }'
@@ -119,9 +112,7 @@
       debug:
         msg: "{{ salida_usuarios.stdout_lines }}"
 
-  # -------------------------------------------------------------------
-  # 1C) Guardar facts + puertos → JSON y traerlo al control
-  # -------------------------------------------------------------------
+    # 1C) Guardar facts + puertos → JSON y traerlo al control
     - name: Guardar facts + puertos en JSON en el host
       copy:
         content: "{{ ansible_facts
@@ -139,16 +130,16 @@
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
-#############################################################
+########################################################################
 # 2. localhost: genera/actualiza Inventario_Equipos_DMZ.xlsx #
-#############################################################
-    - name: Añadir línea al Excel existente a partir de los JSON
-      hosts: localhost
-      gather_facts: no
-      vars:
-        ruta_json_ctl: "/home/semaphore/Excels"
-        script_python: "/home/semaphore/Excels/append_excel.py"
-        ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+########################################################################
+- name: Añadir línea al Excel existente a partir de los JSON
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    script_python: "/home/semaphore/Excels/append_excel.py"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
     - name: Copiar / actualizar script Python para añadir línea
@@ -213,7 +204,6 @@
     - name: ✅ Mensaje final de éxito
       debug:
         msg: "✅ Archivos copiados correctamente a {{ mountpoint }}"
-
 
 
 
