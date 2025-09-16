@@ -142,13 +142,13 @@
 #############################################################
 # 2. localhost: genera/actualiza Inventario_Equipos_DMZ.xlsx #
 #############################################################
-- name: Añadir línea al Excel existente a partir de los JSON
-  hosts: localhost
-  gather_facts: no
-  vars:
-    ruta_json_ctl: "/home/semaphore/Excels"
-    script_python: "/home/semaphore/Excels/append_excel.py"
-    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    - name: Añadir línea al Excel existente a partir de los JSON
+      hosts: localhost
+      gather_facts: no
+      vars:
+        ruta_json_ctl: "/home/semaphore/Excels"
+        script_python: "/home/semaphore/Excels/append_excel.py"
+        ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
 
   tasks:
     - name: Copiar / actualizar script Python para añadir línea
@@ -158,7 +158,7 @@
         mode: "0755"
         force: true
 
-   - name: Buscar todos los JSON de inventario
+    - name: Buscar todos los JSON de inventario
       find:
         paths: "{{ ruta_json_ctl }}"
         patterns: "info_*.json"
@@ -213,3 +213,7 @@
     - name: ✅ Mensaje final de éxito
       debug:
         msg: "✅ Archivos copiados correctamente a {{ mountpoint }}"
+
+
+
+
