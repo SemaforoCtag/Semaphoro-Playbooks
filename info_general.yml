@@ -158,15 +158,21 @@
         mode: "0755"
         force: true
 
+   - name: Buscar todos los JSON de inventario
+      find:
+        paths: "{{ ruta_json_ctl }}"
+        patterns: "info_*.json"
+        file_type: file
+      register: json_files
+
     - name: Ejecutar script para añadir línea al Excel
       command: >
-        python3 {{ script_python }}
-        {{ ruta_excel }}
-        {{ ruta_json_ctl }}/info_*.json
+        python3 {{ script_python }} {{ ruta_excel }} {{ item }}
+      loop: "{{ json_files.files | map(attribute='path') | list }}"
       register: excel_append
 
     - debug:
-        var: excel_append.stdout
+        var: excel_append.results
 
 ################################################################
 # 3. Windows: copiar al share \\srvctdep02\Deploy\Ansible ######
