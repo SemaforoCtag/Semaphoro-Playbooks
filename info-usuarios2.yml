@@ -1,8 +1,8 @@
 ---
 ##########################################################
-# 1. Recoger usuarios (Linux y Windows) → JSON → fetch   #
+# 1) Recoger usuarios (Linux/Windows) → JSON → fetch     #
 ##########################################################
-- name: Recoger usuarios no-servicio y volcarlos en JSON
+- name: Recoger usuarios no-servicio y traer JSON al controlador
   hosts: semaforos
   gather_facts: yes
   become: true
@@ -15,8 +15,8 @@
     windows_exclude_never_logged: false
 
   pre_tasks:
-    - name: Crear carpeta local para los JSON
-      file:
+    - name: Crear carpeta local para JSON (en el controlador)
+      ansible.builtin.file:
         path: "{{ ruta_json_ctl }}"
         state: directory
         mode: "0755"
@@ -26,97 +26,302 @@
 
   tasks:
     - name: Detectar si el sistema es Windows
-      set_fact:
+      ansible.builtin.set_fact:
         es_windows: "{{ ansible_os_family == 'Windows' }}"
 
-    # =============== LINUX ==================
-    - name: Obtener usuarios "no de servicio" en Linux
+    # ---------- LINUX ----------
+    - name: Obtener usuarios "no servicio" en Linux (UID>=min_uid y shell de login)
       when: not es_windows
-      shell: |
+      ansible.builtin.shell: |
         echo "Usuarios del sistema:"
         getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(nologin|false)/) { print $1 " (UID: " $3 ", GID: " $4 ", Shell: " $7 ")" }'
         echo ""
         echo "Grupos del sistema:"
         getent group
-      register: salida_linux
       args:
         executable: /bin/bash
+      register: salida_linux
       changed_when: false
 
-    # =============== WINDOWS ==================
-    - name: Obtener usuarios "no de servicio" en Windows
+    # ---------- WINDOWS ----------
+    - name: Obtener usuarios "no servicio" en Windows (con sus grupos locales)
       when: es_windows
-      win_shell: |
+      ansible.windows.win_shell: |
         $builtInRIDs = @('500','501','503','504')  # Admin, Guest, DefaultAccount, WDAGUtilityAccount
         $usuarios = Get-LocalUser |
           Where-Object {
             $_.Enabled -eq $true -and
             ($builtInRIDs -notcontains (($_.SID.Value -split '-')[-1])) -and
             ($_.Name -notmatch '{{ windows_exclude_regex }}')
+          } | Select-Object -ExpandProperty Name
+
+        $res = @()
+        foreach ($u in $usuarios) {
+          $host=$env:COMPUTERNAME
+          $pattern="^$host\\$u$"
+          $groups = Get-LocalGroup | ForEach-Object {
+            $g = $_
+            $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue
+            if ($members | Where-Object { $_.Name -match $pattern }) { $g.Name }
           }
-        if ({{ windows_exclude_never_logged | lower }}) {
-          $usuarios = $usuarios | Where-Object { $_.LastLogon -ne $null }
+          $res += [PSCustomObject]@{
+            user   = $u
+            groups = @($groups | Sort-Object -Unique)
+          }
         }
-        $usuarios | Select-Object -ExpandProperty Name
-      register: salida_windows
+        $res | ConvertTo-Json -Depth 5
+      register: windows_user_groups
       changed_when: false
 
-    # =============== CREAR JSON Y FETCH ==================
-    - name: Guardar usuarios en JSON en el host remoto
-      copy:
+    # ---------- JSON UNIFICADO Y FETCH ----------
+    - name: Guardar datos en JSON en el host remoto
+      ansible.builtin.copy:
+        dest: "{{ ruta_json_remoto }}"
+        mode: "0644"
         content: |
           {{
             {
               'ansible_facts': ansible_facts,
-              'inventory_hostname': inventory_hostname,
-              'usuarios': (
-                salida_linux.stdout_lines if not es_windows else salida_windows.stdout_lines
-              )
+              'inventory_hostname': inventory_hostname
             }
+            | combine(
+                es_windows
+                | ternary(
+                    {'user_groups': (windows_user_groups.stdout | default('[]'))},
+                    {'usuarios': (salida_linux.stdout_lines | default([]))}
+                  )
+              )
             | to_nice_json
           }}
-        dest: "{{ ruta_json_remoto }}"
-        mode: "0644"
       changed_when: false
 
-    - name: Traer JSON al nodo de control
-      fetch:
+    - name: Traer JSON al controlador
+      ansible.builtin.fetch:
         src: "{{ ruta_json_remoto }}"
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
-###############################################################
-# 2. Ejecutar append_excel.py para actualizar el Excel global #
-###############################################################
-- name: Actualizar Excel con los JSON de usuarios
+##########################################################
+# 2) Localhost: abrir/crear Excel y AÑADIR filas         #
+##########################################################
+- name: Actualizar Excel existente (crear si no existe) con los JSON
   hosts: localhost
   gather_facts: no
 
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    # ← PON AQUÍ EL EXCEL QUE QUIERES USAR (se crea si no existe)
+    ruta_excel:    "/home/semaphore/Excels/Inventario_usuarios_DMZ.xlsx"
     script_python: "/home/semaphore/Excels/append_excel2.py"
+    # Si quieres “solo añadir” (nunca actualizar filas existentes), pon true:
+    solo_anadir: true
 
   tasks:
-    - name: Copiar script Python (si no existe o hay nueva versión)
-      copy:
-        src: "./append_excel.py"
+    - name: Asegurar carpeta de trabajo
+      ansible.builtin.file:
+        path: "{{ ruta_json_ctl }}"
+        state: directory
+        mode: "0755"
+
+    - name: Asegurar openpyxl instalado (para el script)
+      ansible.builtin.pip:
+        name: openpyxl
+        executable: pip3
+
+    # INSTALA/ACTUALIZA EL SCRIPT con soporte --append-only
+    - name: Instalar/actualizar append_excel2.py (embebido)
+      ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
-        force: true
+        content: |
+          #!/usr/bin/env python3
+          import json, sys, os, argparse
+          from collections import defaultdict
+          from openpyxl import Workbook, load_workbook
+          from openpyxl.utils import get_column_letter
+
+          def load_json(path):
+              with open(path, "r", encoding="utf-8") as f:
+                  return json.load(f)
+
+          def ensure_workbook(xlsx_path):
+              if os.path.exists(xlsx_path) and os.path.getsize(xlsx_path) > 0:
+                  wb = load_workbook(xlsx_path)
+                  # no cambiamos la hoja activa existente
+                  ws = wb.active
+                  header = ["IP", "Usuario", "Grupos"]
+                  # si la hoja activa no coincide, creamos una hoja nueva estándar
+                  if [c.value for c in ws[1]] != header:
+                      ws = wb.create_sheet("Inventario_Usuarios")
+                      ws.append(header)
+              else:
+                  wb = Workbook()
+                  ws = wb.active
+                  ws.title = "Inventario_Usuarios"
+                  ws.append(["IP", "Usuario", "Grupos"])
+              return wb, ws
+
+          def autosize_columns(ws):
+              widths = defaultdict(int)
+              for row in ws.iter_rows(values_only=True):
+                  for i, v in enumerate(row, start=1):
+                      s = "" if v is None else str(v)
+                      widths[i] = max(widths[i], len(s))
+              for i, w in widths.items():
+                  ws.column_dimensions[get_column_letter(i)].width = min(max(w + 2, 10), 60)
+
+          def parse_linux_users_and_groups(usuarios_stdout_lines):
+              users_gid = {}
+              gid_to_group = {}
+              from collections import defaultdict as DD
+              group_members = DD(set)
+              try:
+                  idx_users = usuarios_stdout_lines.index("Usuarios del sistema:")
+              except ValueError:
+                  idx_users = -1
+              try:
+                  idx_groups = usuarios_stdout_lines.index("Grupos del sistema:")
+              except ValueError:
+                  idx_groups = -1
+              if idx_users >= 0:
+                  end_users = idx_groups if idx_groups > idx_users else len(usuarios_stdout_lines)
+                  for line in usuarios_stdout_lines[idx_users + 1:end_users]:
+                      line = line.strip()
+                      if not line or "(" not in line or "UID:" not in line:
+                          continue
+                      try:
+                          name = line.split("(", 1)[0].strip()
+                          inside = line.split("(", 1)[1].rstrip(")")
+                          parts = [p.strip() for p in inside.split(",")]
+                          gid = int(parts[1].split("GID:")[1].strip())
+                          shell = parts[2].split("Shell:")[1].strip()
+                          users_gid[name] = (gid, shell)
+                      except Exception:
+                          continue
+              if idx_groups >= 0:
+                  for line in usuarios_stdout_lines[idx_groups + 1:]:
+                      line = line.strip()
+                      if not line or ":" not in line:
+                          continue
+                      parts = line.split(":")
+                      if len(parts) < 3:
+                          continue
+                      gname = parts[0]
+                      try:
+                          gid = int(parts[2])
+                      except Exception:
+                          continue
+                      gid_to_group[gid] = gname
+                      if len(parts) >= 4 and parts[3]:
+                          for m in parts[3].split(","):
+                              m = m.strip()
+                              if m:
+                                  group_members[gname].add(m)
+              user_to_groups = defaultdict(set)
+              for user, (gid, _shell) in users_gid.items():
+                  gname = gid_to_group.get(gid)
+                  if gname:
+                      user_to_groups[user].add(gname)
+              for gname, members in group_members.items():
+                  for m in members:
+                      user_to_groups[m].add(gname)
+              filtered = {}
+              for user, (gid, shell) in users_gid.items():
+                  if shell.endswith("nologin") or shell.endswith("/false"):
+                      continue
+                  filtered[user] = sorted(list(user_to_groups.get(user, set())))
+              return filtered
+
+          def parse_args():
+              p = argparse.ArgumentParser()
+              p.add_argument("xlsx_path")
+              p.add_argument("json_path")
+              p.add_argument("--append-only", action="store_true",
+                             help="Nunca actualizar filas existentes; añadir siempre nuevas")
+              return p.parse_args()
+
+          def main():
+              args = parse_args()
+              xlsx_path = args.xlsx_path
+              json_path = args.json_path
+              append_only = args.append_only
+
+              data = load_json(json_path)
+              facts = data if isinstance(data, dict) else {}
+              ip = ""
+              try:
+                  ip = facts.get("ansible_facts", {}).get("ansible_default_ipv4", {}).get("address", "")
+              except Exception:
+                  ip = ""
+              if not ip:
+                  cand = facts.get("inventory_hostname")
+                  if isinstance(cand, str) and all(c.isdigit() or c == "." for c in cand):
+                      ip = cand
+
+              usuarios_lines = facts.get("usuarios", [])
+              if not isinstance(usuarios_lines, list):
+                  usuarios_lines = []
+              users_to_groups = parse_linux_users_and_groups(usuarios_lines)
+
+              if not users_to_groups:
+                  ug = facts.get("user_groups")
+                  if isinstance(ug, list):
+                      tmp = {}
+                      for item in ug:
+                          user = item.get("user")
+                          groups = item.get("groups") or []
+                          if user:
+                              tmp[user] = list(groups)
+                      users_to_groups = tmp
+
+              wb, ws = ensure_workbook(xlsx_path)
+
+              existing = {}
+              if not append_only:
+                  for r in range(2, ws.max_row + 1):
+                      ip_v = ws.cell(row=r, column=1).value
+                      user_v = ws.cell(row=r, column=2).value
+                      if ip_v and user_v:
+                          existing[(str(ip_v), str(user_v))] = r
+
+              written = 0
+              for user, groups in sorted(users_to_groups.items()):
+                  groups_str = ", ".join(groups)
+                  if append_only:
+                      ws.append([ip, user, groups_str])
+                  else:
+                      key = (ip, user)
+                      if key in existing:
+                          r = existing[key]
+                          ws.cell(row=r, column=1, value=ip)
+                          ws.cell(row=r, column=2, value=user)
+                          ws.cell(row=r, column=3, value=groups_str)
+                      else:
+                          ws.append([ip, user, groups_str])
+                  written += 1
+
+              autosize_columns(ws)
+              wb.save(xlsx_path)
+              print(f"OK - {written} filas {'añadidas' if append_only else 'escritas/actualizadas'} para IP {ip}")
+
+          if __name__ == "__main__":
+              main()
 
     - name: Buscar los JSON de usuarios
-      find:
+      ansible.builtin.find:
         paths: "{{ ruta_json_ctl }}"
         patterns: "info_*.json"
         file_type: file
       register: json_files
 
-    - name: Ejecutar script append_excel.py para cada JSON
-      command: >
-        python3 {{ script_python }} {{ ruta_excel }} {{ item.path }}
+    - name: Ejecutar append_excel2.py (crear si no existe, añadir si existe)
+      ansible.builtin.command: >
+        python3 {{ script_python }} {{ ruta_excel }} {{ item.path }} {% if solo_anadir %}--append-only{% endif %}
       loop: "{{ json_files.files }}"
       register: excel_results
+      when: json_files.matched | int > 0
 
-    - debug:
+    - name: Mostrar resultados del script
+      ansible.builtin.debug:
         msg: "{{ excel_results.results | map(attribute='stdout') | list }}"
+      when: excel_results is defined
