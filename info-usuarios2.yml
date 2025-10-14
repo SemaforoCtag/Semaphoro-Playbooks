@@ -1,70 +1,122 @@
 ---
-- name: Mostrar usuarios y permisos en Linux y Windows (solo no-servicio)
+##########################################################
+# 1. Recoger usuarios (Linux y Windows) → JSON → fetch   #
+##########################################################
+- name: Recoger usuarios no-servicio y volcarlos en JSON
   hosts: semaforos
   gather_facts: yes
   become: true
 
   vars:
-    # Linux: la mayoría de distros reservan UIDs <1000 para cuentas de sistema
+    ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
+    ruta_json_ctl:    "/home/semaphore/Excels"
     min_uid: 1000
-    # Windows: añade aquí patrones propios (p.ej. ^svc_ ). Se excluyen integradas por SID aparte.
     windows_exclude_regex: '^(DefaultAccount|WDAGUtilityAccount|Guest|Administrator)$'
-    # Si quieres excluir también los que nunca iniciaron sesión en Windows, pon esto en true
     windows_exclude_never_logged: false
+
+  pre_tasks:
+    - name: Crear carpeta local para los JSON
+      file:
+        path: "{{ ruta_json_ctl }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+      become: false
 
   tasks:
     - name: Detectar si el sistema es Windows
       set_fact:
         es_windows: "{{ ansible_os_family == 'Windows' }}"
 
-    # ---------- LINUX ----------
-    - name: Obtener usuarios "humanos" en Linux (UID >= min_uid y shell de login)
+    # =============== LINUX ==================
+    - name: Obtener usuarios "no de servicio" en Linux
       when: not es_windows
       shell: |
-        echo "Usuarios de login (no de servicio):"
-        getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(\/usr\/sbin\/nologin|\/sbin\/nologin|\/bin\/false)/) { printf "%s (UID: %s, GID: %s, Shell: %s)\n", $1,$3,$4,$7 }'
+        echo "Usuarios del sistema:"
+        getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(nologin|false)/) { print $1 " (UID: " $3 ", GID: " $4 ", Shell: " $7 ")" }'
         echo ""
-        echo "Grupos con GID >= {{ min_uid }}:"
-        getent group | awk -F: '$3 >= {{ min_uid }} { print $0 }'
+        echo "Grupos del sistema:"
+        getent group
       register: salida_linux
       args:
         executable: /bin/bash
       changed_when: false
 
-    - name: Mostrar resultado Linux en consola
-      when: not es_windows
-      debug:
-        msg: "{{ salida_linux.stdout_lines }}"
-
-    # ---------- WINDOWS ----------
-    - name: Obtener usuarios "humanos" en Windows (excluir integrados/servicio)
+    # =============== WINDOWS ==================
+    - name: Obtener usuarios "no de servicio" en Windows
       when: es_windows
       win_shell: |
-        # RIDs integrados: 500=Administrator, 501=Guest, 503=DefaultAccount, 504=WDAGUtilityAccount
-        $builtInRIDs = @('500','501','503','504')
-
+        $builtInRIDs = @('500','501','503','504')  # Admin, Guest, DefaultAccount, WDAGUtilityAccount
         $usuarios = Get-LocalUser |
           Where-Object {
             $_.Enabled -eq $true -and
             ($builtInRIDs -notcontains (($_.SID.Value -split '-')[-1])) -and
             ($_.Name -notmatch '{{ windows_exclude_regex }}')
           }
-
         if ({{ windows_exclude_never_logged | lower }}) {
           $usuarios = $usuarios | Where-Object { $_.LastLogon -ne $null }
         }
-
-        $usuarios = $usuarios | Select-Object Name, Enabled, LastLogon
-
-        $gruposAdmin = Get-LocalGroupMember -Group 'Administrators' |
-          Select-Object Name, ObjectClass
-
-        "Usuarios locales (no servicio):`n" + ($usuarios | Format-Table -AutoSize | Out-String) +
-        "`nMiembros del grupo Administrators:`n" + ($gruposAdmin | Format-Table -AutoSize | Out-String)
+        $usuarios | Select-Object -ExpandProperty Name
       register: salida_windows
       changed_when: false
 
-    - name: Mostrar resultado Windows en consola
-      when: es_windows
-      debug:
-        msg: "{{ salida_windows.stdout_lines }}"
+    # =============== CREAR JSON Y FETCH ==================
+    - name: Guardar usuarios en JSON en el host remoto
+      copy:
+        content: |
+          {{
+            {
+              'ansible_facts': ansible_facts,
+              'inventory_hostname': inventory_hostname,
+              'usuarios': (
+                salida_linux.stdout_lines if not es_windows else salida_windows.stdout_lines
+              )
+            }
+            | to_nice_json
+          }}
+        dest: "{{ ruta_json_remoto }}"
+        mode: "0644"
+      changed_when: false
+
+    - name: Traer JSON al nodo de control
+      fetch:
+        src: "{{ ruta_json_remoto }}"
+        dest: "{{ ruta_json_ctl }}/"
+        flat: true
+
+###############################################################
+# 2. Ejecutar append_excel.py para actualizar el Excel global #
+###############################################################
+- name: Actualizar Excel con los JSON de usuarios
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    script_python: "/home/semaphore/Excels/append_excel.py"
+
+  tasks:
+    - name: Copiar script Python (si no existe o hay nueva versión)
+      copy:
+        src: "./append_excel.py"
+        dest: "{{ script_python }}"
+        mode: "0755"
+        force: true
+
+    - name: Buscar los JSON de usuarios
+      find:
+        paths: "{{ ruta_json_ctl }}"
+        patterns: "info_*.json"
+        file_type: file
+      register: json_files
+
+    - name: Ejecutar script append_excel.py para cada JSON
+      command: >
+        python3 {{ script_python }} {{ ruta_excel }} {{ item.path }}
+      loop: "{{ json_files.files }}"
+      register: excel_results
+
+    - debug:
+        msg: "{{ excel_results.results | map(attribute='stdout') | list }}"
