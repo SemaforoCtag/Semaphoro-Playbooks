@@ -1,16 +1,18 @@
+---
 - name: Mostrar usuarios y permisos en Linux y Windows (solo no-servicio)
   hosts: semaforos
   gather_facts: yes
   become: true
 
   vars:
-    # Por si quieres cambiarlo por distro/política interna
+    # Linux: la mayoría de distros reservan UIDs <1000 para cuentas de sistema
     min_uid: 1000
-    # Para Windows, por si quieres añadir patrones propios (p.ej. ^svc_)
+    # Windows: añade aquí patrones propios (p.ej. ^svc_ ). Se excluyen integradas por SID aparte.
     windows_exclude_regex: '^(DefaultAccount|WDAGUtilityAccount|Guest|Administrator)$'
+    # Si quieres excluir también los que nunca iniciaron sesión en Windows, pon esto en true
+    windows_exclude_never_logged: false
 
   tasks:
-
     - name: Detectar si el sistema es Windows
       set_fact:
         es_windows: "{{ ansible_os_family == 'Windows' }}"
@@ -27,6 +29,7 @@
       register: salida_linux
       args:
         executable: /bin/bash
+      changed_when: false
 
     - name: Mostrar resultado Linux en consola
       when: not es_windows
@@ -36,7 +39,7 @@
     # ---------- WINDOWS ----------
     - name: Obtener usuarios "humanos" en Windows (excluir integrados/servicio)
       when: es_windows
-      win_powershell: |
+      win_shell: |
         # RIDs integrados: 500=Administrator, 501=Guest, 503=DefaultAccount, 504=WDAGUtilityAccount
         $builtInRIDs = @('500','501','503','504')
 
@@ -45,11 +48,13 @@
             $_.Enabled -eq $true -and
             ($builtInRIDs -notcontains (($_.SID.Value -split '-')[-1])) -and
             ($_.Name -notmatch '{{ windows_exclude_regex }}')
-          } |
-          Select-Object Name, Enabled, LastLogon
+          }
 
-        # Si quieres además excluir cuentas que nunca iniciaron sesión (típico en cuentas de servicio), descomenta:
-        # $usuarios = $usuarios | Where-Object { $_.LastLogon -ne $null }
+        if ({{ windows_exclude_never_logged | lower }}) {
+          $usuarios = $usuarios | Where-Object { $_.LastLogon -ne $null }
+        }
+
+        $usuarios = $usuarios | Select-Object Name, Enabled, LastLogon
 
         $gruposAdmin = Get-LocalGroupMember -Group 'Administrators' |
           Select-Object Name, ObjectClass
@@ -57,6 +62,7 @@
         "Usuarios locales (no servicio):`n" + ($usuarios | Format-Table -AutoSize | Out-String) +
         "`nMiembros del grupo Administrators:`n" + ($gruposAdmin | Format-Table -AutoSize | Out-String)
       register: salida_windows
+      changed_when: false
 
     - name: Mostrar resultado Windows en consola
       when: es_windows
