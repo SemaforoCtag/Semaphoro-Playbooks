@@ -110,11 +110,10 @@
 
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    # ← PON AQUÍ EL EXCEL QUE QUIERES USAR (se crea si no existe)
-    ruta_excel:    "/home/semaphore/Excels/Inventario_usuarios_DMZ.xlsx"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"   # ← NO se machaca; se crea si no existe
     script_python: "/home/semaphore/Excels/append_excel2.py"
-    # Si quieres “solo añadir” (nunca actualizar filas existentes), pon true:
-    solo_anadir: true
+    venv_path:     "/home/semaphore/Excels/.venv"
+    solo_anadir:   true   # pon false si quieres actualizar filas existentes
 
   tasks:
     - name: Asegurar carpeta de trabajo
@@ -123,189 +122,34 @@
         state: directory
         mode: "0755"
 
-    - name: Asegurar openpyxl instalado (para el script)
-      ansible.builtin.pip:
-        name: openpyxl
-        executable: pip3
+    # --- venv por PEP 668 ---
+    - name: Instalar python3-venv (para crear entornos virtuales)
+      become: true
+      ansible.builtin.apt:
+        name: python3-venv
+        state: present
+        update_cache: true
 
-    # INSTALA/ACTUALIZA EL SCRIPT con soporte --append-only
+    - name: Crear virtualenv
+      ansible.builtin.command: python3 -m venv {{ venv_path }}
+      args:
+        creates: "{{ venv_path }}/bin/python"
+
+    - name: Actualizar pip dentro del venv
+      ansible.builtin.command: "{{ venv_path }}/bin/python -m pip install --upgrade pip"
+
+    - name: Instalar dependencias en el venv
+      ansible.builtin.command: "{{ venv_path }}/bin/pip install openpyxl"
+
+    # (Opcional) Solo si quieres desplegar/actualizar el script desde el playbook:
+    # Si ya lo tienes en esa ruta, puedes omitir esta tarea.
     - name: Instalar/actualizar append_excel2.py (embebido)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
-          import json, sys, os, argparse
-          from collections import defaultdict
-          from openpyxl import Workbook, load_workbook
-          from openpyxl.utils import get_column_letter
-
-          def load_json(path):
-              with open(path, "r", encoding="utf-8") as f:
-                  return json.load(f)
-
-          def ensure_workbook(xlsx_path):
-              if os.path.exists(xlsx_path) and os.path.getsize(xlsx_path) > 0:
-                  wb = load_workbook(xlsx_path)
-                  # no cambiamos la hoja activa existente
-                  ws = wb.active
-                  header = ["IP", "Usuario", "Grupos"]
-                  # si la hoja activa no coincide, creamos una hoja nueva estándar
-                  if [c.value for c in ws[1]] != header:
-                      ws = wb.create_sheet("Inventario_Usuarios")
-                      ws.append(header)
-              else:
-                  wb = Workbook()
-                  ws = wb.active
-                  ws.title = "Inventario_Usuarios"
-                  ws.append(["IP", "Usuario", "Grupos"])
-              return wb, ws
-
-          def autosize_columns(ws):
-              widths = defaultdict(int)
-              for row in ws.iter_rows(values_only=True):
-                  for i, v in enumerate(row, start=1):
-                      s = "" if v is None else str(v)
-                      widths[i] = max(widths[i], len(s))
-              for i, w in widths.items():
-                  ws.column_dimensions[get_column_letter(i)].width = min(max(w + 2, 10), 60)
-
-          def parse_linux_users_and_groups(usuarios_stdout_lines):
-              users_gid = {}
-              gid_to_group = {}
-              from collections import defaultdict as DD
-              group_members = DD(set)
-              try:
-                  idx_users = usuarios_stdout_lines.index("Usuarios del sistema:")
-              except ValueError:
-                  idx_users = -1
-              try:
-                  idx_groups = usuarios_stdout_lines.index("Grupos del sistema:")
-              except ValueError:
-                  idx_groups = -1
-              if idx_users >= 0:
-                  end_users = idx_groups if idx_groups > idx_users else len(usuarios_stdout_lines)
-                  for line in usuarios_stdout_lines[idx_users + 1:end_users]:
-                      line = line.strip()
-                      if not line or "(" not in line or "UID:" not in line:
-                          continue
-                      try:
-                          name = line.split("(", 1)[0].strip()
-                          inside = line.split("(", 1)[1].rstrip(")")
-                          parts = [p.strip() for p in inside.split(",")]
-                          gid = int(parts[1].split("GID:")[1].strip())
-                          shell = parts[2].split("Shell:")[1].strip()
-                          users_gid[name] = (gid, shell)
-                      except Exception:
-                          continue
-              if idx_groups >= 0:
-                  for line in usuarios_stdout_lines[idx_groups + 1:]:
-                      line = line.strip()
-                      if not line or ":" not in line:
-                          continue
-                      parts = line.split(":")
-                      if len(parts) < 3:
-                          continue
-                      gname = parts[0]
-                      try:
-                          gid = int(parts[2])
-                      except Exception:
-                          continue
-                      gid_to_group[gid] = gname
-                      if len(parts) >= 4 and parts[3]:
-                          for m in parts[3].split(","):
-                              m = m.strip()
-                              if m:
-                                  group_members[gname].add(m)
-              user_to_groups = defaultdict(set)
-              for user, (gid, _shell) in users_gid.items():
-                  gname = gid_to_group.get(gid)
-                  if gname:
-                      user_to_groups[user].add(gname)
-              for gname, members in group_members.items():
-                  for m in members:
-                      user_to_groups[m].add(gname)
-              filtered = {}
-              for user, (gid, shell) in users_gid.items():
-                  if shell.endswith("nologin") or shell.endswith("/false"):
-                      continue
-                  filtered[user] = sorted(list(user_to_groups.get(user, set())))
-              return filtered
-
-          def parse_args():
-              p = argparse.ArgumentParser()
-              p.add_argument("xlsx_path")
-              p.add_argument("json_path")
-              p.add_argument("--append-only", action="store_true",
-                             help="Nunca actualizar filas existentes; añadir siempre nuevas")
-              return p.parse_args()
-
-          def main():
-              args = parse_args()
-              xlsx_path = args.xlsx_path
-              json_path = args.json_path
-              append_only = args.append_only
-
-              data = load_json(json_path)
-              facts = data if isinstance(data, dict) else {}
-              ip = ""
-              try:
-                  ip = facts.get("ansible_facts", {}).get("ansible_default_ipv4", {}).get("address", "")
-              except Exception:
-                  ip = ""
-              if not ip:
-                  cand = facts.get("inventory_hostname")
-                  if isinstance(cand, str) and all(c.isdigit() or c == "." for c in cand):
-                      ip = cand
-
-              usuarios_lines = facts.get("usuarios", [])
-              if not isinstance(usuarios_lines, list):
-                  usuarios_lines = []
-              users_to_groups = parse_linux_users_and_groups(usuarios_lines)
-
-              if not users_to_groups:
-                  ug = facts.get("user_groups")
-                  if isinstance(ug, list):
-                      tmp = {}
-                      for item in ug:
-                          user = item.get("user")
-                          groups = item.get("groups") or []
-                          if user:
-                              tmp[user] = list(groups)
-                      users_to_groups = tmp
-
-              wb, ws = ensure_workbook(xlsx_path)
-
-              existing = {}
-              if not append_only:
-                  for r in range(2, ws.max_row + 1):
-                      ip_v = ws.cell(row=r, column=1).value
-                      user_v = ws.cell(row=r, column=2).value
-                      if ip_v and user_v:
-                          existing[(str(ip_v), str(user_v))] = r
-
-              written = 0
-              for user, groups in sorted(users_to_groups.items()):
-                  groups_str = ", ".join(groups)
-                  if append_only:
-                      ws.append([ip, user, groups_str])
-                  else:
-                      key = (ip, user)
-                      if key in existing:
-                          r = existing[key]
-                          ws.cell(row=r, column=1, value=ip)
-                          ws.cell(row=r, column=2, value=user)
-                          ws.cell(row=r, column=3, value=groups_str)
-                      else:
-                          ws.append([ip, user, groups_str])
-                  written += 1
-
-              autosize_columns(ws)
-              wb.save(xlsx_path)
-              print(f"OK - {written} filas {'añadidas' if append_only else 'escritas/actualizadas'} para IP {ip}")
-
-          if __name__ == "__main__":
-              main()
+          # ... pega aquí el contenido de tu append_excel2.py (el tuyo actual) ...
 
     - name: Buscar los JSON de usuarios
       ansible.builtin.find:
@@ -314,9 +158,9 @@
         file_type: file
       register: json_files
 
-    - name: Ejecutar append_excel2.py (crear si no existe, añadir si existe)
+    - name: Ejecutar append_excel2.py usando el Python del venv
       ansible.builtin.command: >
-        python3 {{ script_python }} {{ ruta_excel }} {{ item.path }} {% if solo_anadir %}--append-only{% endif %}
+        {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item.path }} {% if solo_anadir %}--append-only{% endif %}
       loop: "{{ json_files.files }}"
       register: excel_results
       when: json_files.matched | int > 0
