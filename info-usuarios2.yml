@@ -1,0 +1,64 @@
+- name: Mostrar usuarios y permisos en Linux y Windows (solo no-servicio)
+  hosts: semaforos
+  gather_facts: yes
+  become: true
+
+  vars:
+    # Por si quieres cambiarlo por distro/política interna
+    min_uid: 1000
+    # Para Windows, por si quieres añadir patrones propios (p.ej. ^svc_)
+    windows_exclude_regex: '^(DefaultAccount|WDAGUtilityAccount|Guest|Administrator)$'
+
+  tasks:
+
+    - name: Detectar si el sistema es Windows
+      set_fact:
+        es_windows: "{{ ansible_os_family == 'Windows' }}"
+
+    # ---------- LINUX ----------
+    - name: Obtener usuarios "humanos" en Linux (UID >= min_uid y shell de login)
+      when: not es_windows
+      shell: |
+        echo "Usuarios de login (no de servicio):"
+        getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(\/usr\/sbin\/nologin|\/sbin\/nologin|\/bin\/false)/) { printf "%s (UID: %s, GID: %s, Shell: %s)\n", $1,$3,$4,$7 }'
+        echo ""
+        echo "Grupos con GID >= {{ min_uid }}:"
+        getent group | awk -F: '$3 >= {{ min_uid }} { print $0 }'
+      register: salida_linux
+      args:
+        executable: /bin/bash
+
+    - name: Mostrar resultado Linux en consola
+      when: not es_windows
+      debug:
+        msg: "{{ salida_linux.stdout_lines }}"
+
+    # ---------- WINDOWS ----------
+    - name: Obtener usuarios "humanos" en Windows (excluir integrados/servicio)
+      when: es_windows
+      win_powershell: |
+        # RIDs integrados: 500=Administrator, 501=Guest, 503=DefaultAccount, 504=WDAGUtilityAccount
+        $builtInRIDs = @('500','501','503','504')
+
+        $usuarios = Get-LocalUser |
+          Where-Object {
+            $_.Enabled -eq $true -and
+            ($builtInRIDs -notcontains (($_.SID.Value -split '-')[-1])) -and
+            ($_.Name -notmatch '{{ windows_exclude_regex }}')
+          } |
+          Select-Object Name, Enabled, LastLogon
+
+        # Si quieres además excluir cuentas que nunca iniciaron sesión (típico en cuentas de servicio), descomenta:
+        # $usuarios = $usuarios | Where-Object { $_.LastLogon -ne $null }
+
+        $gruposAdmin = Get-LocalGroupMember -Group 'Administrators' |
+          Select-Object Name, ObjectClass
+
+        "Usuarios locales (no servicio):`n" + ($usuarios | Format-Table -AutoSize | Out-String) +
+        "`nMiembros del grupo Administrators:`n" + ($gruposAdmin | Format-Table -AutoSize | Out-String)
+      register: salida_windows
+
+    - name: Mostrar resultado Windows en consola
+      when: es_windows
+      debug:
+        msg: "{{ salida_windows.stdout_lines }}"
