@@ -179,7 +179,7 @@
   vars:
     ruta_excel:  "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"   # mismo que en el play 2
     mountpoint:  "/mnt/ansible_share"                                   # punto de montaje ya existente
-    destino:     "Inventario_Equipos_DMZ.xlsx"                           # nombre en el share
+    destino:     "Inventario_Usuarios_Equipos_DMZ.xlsx"                           # nombre en el share
 
   tasks:
     - name: Verificar que el Excel existe en local
