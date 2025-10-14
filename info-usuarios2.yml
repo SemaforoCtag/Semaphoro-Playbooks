@@ -110,7 +110,7 @@
 
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"   # ← NO se machaca; se crea si no existe
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"   # ← NO se machaca; se crea si no existe
     script_python: "/home/semaphore/Excels/append_excel2.py"
     venv_path:     "/home/semaphore/Excels/.venv"
     solo_anadir:   true   # pon false si quieres actualizar filas existentes
@@ -169,3 +169,54 @@
       ansible.builtin.debug:
         msg: "{{ excel_results.results | map(attribute='stdout') | list }}"
       when: excel_results is defined
+############################################################
+# 3) Copiar el Excel al recurso compartido ya MONTADO      #
+############################################################
+- name: Copiar Inventario al recurso de red
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    ruta_excel:  "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"   # mismo que en el play 2
+    mountpoint:  "/mnt/ansible_share"                                   # punto de montaje ya existente
+    destino:     "Inventario_Equipos_DMZ.xlsx"                           # nombre en el share
+
+  tasks:
+    - name: Verificar que el Excel existe en local
+      ansible.builtin.stat:
+        path: "{{ ruta_excel }}"
+      register: excel_stat
+
+    - name: Fallar si no existe el Excel (revisa el play 2)
+      ansible.builtin.fail:
+        msg: "❌ No existe {{ ruta_excel }}. Asegúrate de que el play 2 lo creó."
+      when: not excel_stat.stat.exists
+
+    - name: Verificar que el recurso está montado
+      ansible.builtin.stat:
+        path: "{{ mountpoint }}"
+      register: mount_stat
+
+    - name: Fallar si no está montado
+      ansible.builtin.fail:
+        msg: "❌ El recurso {{ mountpoint }} no está montado. Móntalo antes de copiar."
+      when: not mount_stat.stat.exists
+
+    - name: Crear carpeta destino si no existe
+      ansible.builtin.file:
+        path: "{{ mountpoint }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copiar Excel al recurso compartido
+      become: true
+      ansible.builtin.copy:
+        src: "{{ ruta_excel }}"
+        dest: "{{ mountpoint }}/{{ destino }}"
+        mode: "0644"
+        remote_src: true   # <-- el src ya está en esta máquina (localhost)
+      register: copy_excel
+
+    - name: Confirmación
+      ansible.builtin.debug:
+        msg: "✅ Copiado {{ ruta_excel }} -> {{ mountpoint }}/{{ destino }}"
