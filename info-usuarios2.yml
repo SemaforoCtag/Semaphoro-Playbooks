@@ -95,7 +95,7 @@
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
     ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
-    script_python: "/home/semaphore/Excels/append_excel.py"
+    script_python: "/home/semaphore/Excels/append_excel2.py"
 
   tasks:
     - name: Copiar script Python (si no existe o hay nueva versión)
