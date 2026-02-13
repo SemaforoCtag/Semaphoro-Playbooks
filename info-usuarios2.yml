@@ -1,174 +1,96 @@
----
 ##########################################################
-# 1) Recoger usuarios (Linux/Windows) → JSON → fetch     #
+# 1) Recoger usuarios (Linux/Windows) -> JSON -> fetch   #
 ##########################################################
 - name: Recoger usuarios no-servicio y traer JSON al controlador
   hosts: semaforos
   gather_facts: yes
   become: true
-
   vars:
     ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
     ruta_json_ctl:    "/home/semaphore/Excels"
     min_uid: 1000
-    windows_exclude_regex: '^(DefaultAccount|WDAGUtilityAccount|Guest|Administrator)$'
-    windows_exclude_never_logged: false
-
-  pre_tasks:
-    - name: Crear carpeta local para JSON (en el controlador)
-      ansible.builtin.file:
-        path: "{{ ruta_json_ctl }}"
-        state: directory
-        mode: "0755"
-      delegate_to: localhost
-      run_once: true
-      become: false
 
   tasks:
-    - name: Detectar si el sistema es Windows
-      ansible.builtin.set_fact:
+    - name: Detectar SO
+      set_fact:
         es_windows: "{{ ansible_os_family == 'Windows' }}"
 
-    # ---------- LINUX ----------
-    - name: Obtener usuarios "no servicio" en Linux (UID>=min_uid y shell de login)
+    - name: Linux - Obtener usuarios
       when: not es_windows
-      ansible.builtin.shell: |
-        echo "Usuarios del sistema:"
-        getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(nologin|false)/) { print $1 " (UID: " $3 ", GID: " $4 ", Shell: " $7 ")" }'
-        echo ""
-        echo "Grupos del sistema:"
-        getent group
-      args:
-        executable: /bin/bash
+      shell: "getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(nologin|false)/) { print $1 }'"
       register: salida_linux
       changed_when: false
 
-    # ---------- WINDOWS ----------
-    - name: Obtener usuarios "no servicio" en Windows (con sus grupos locales)
+    - name: Windows - Obtener usuarios
       when: es_windows
-      ansible.windows.win_shell: |
-        $builtInRIDs = @('500','501','503','504')  # Admin, Guest, DefaultAccount, WDAGUtilityAccount
-        $usuarios = Get-LocalUser |
-          Where-Object {
-            $_.Enabled -eq $true -and
-            ($builtInRIDs -notcontains (($_.SID.Value -split '-')[-1])) -and
-            ($_.Name -notmatch '{{ windows_exclude_regex }}')
-          } | Select-Object -ExpandProperty Name
-
-        $res = @()
-        foreach ($u in $usuarios) {
-          $host=$env:COMPUTERNAME
-          $pattern="^$host\\$u$"
-          $groups = Get-LocalGroup | ForEach-Object {
-            $g = $_
-            $members = Get-LocalGroupMember -Group $g.Name -ErrorAction SilentlyContinue
-            if ($members | Where-Object { $_.Name -match $pattern }) { $g.Name }
-          }
-          $res += [PSCustomObject]@{
-            user   = $u
-            groups = @($groups | Sort-Object -Unique)
-          }
-        }
-        $res | ConvertTo-Json -Depth 5
+      ansible.windows.win_shell: "Get-LocalUser | Where-Object { $_.Enabled } | Select-Object -ExpandProperty Name"
       register: windows_user_groups
       changed_when: false
 
-    # ---------- JSON UNIFICADO Y FETCH ----------
-    - name: Guardar datos en JSON en el host remoto
-      ansible.builtin.copy:
+    - name: Guardar JSON en remoto
+      copy:
         dest: "{{ ruta_json_remoto }}"
-        mode: "0644"
         content: |
-          {{
-            {
-              'ansible_facts': ansible_facts,
-              'inventory_hostname': inventory_hostname
-            }
-            | combine(
-                es_windows
-                | ternary(
-                    {'user_groups': (windows_user_groups.stdout | default('[]'))},
-                    {'usuarios': (salida_linux.stdout_lines | default([]))}
-                  )
-              )
-            | to_nice_json
-          }}
-      changed_when: false
+          {
+            "inventory_hostname": "{{ inventory_hostname }}",
+            "usuarios": {{ (es_windows | ternary(windows_user_groups.stdout_lines | default([]), salida_linux.stdout_lines | default([]))) | to_json }}
+          }
 
     - name: Traer JSON al controlador
-      ansible.builtin.fetch:
+      fetch:
         src: "{{ ruta_json_remoto }}"
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
 ##########################################################
-# 2) Localhost: abrir/crear Excel y AÑADIR filas         #
+# 2) Localhost: Procesar Excel                           #
 ##########################################################
-- name: Actualizar Excel existente (crear si no existe) con los JSON
+- name: Actualizar Excel
   hosts: localhost
   gather_facts: no
-
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"   # ← NO se machaca; se crea si no existe
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"
     script_python: "/home/semaphore/Excels/append_excel2.py"
     venv_path:     "/home/semaphore/Excels/.venv"
-    solo_anadir:   true   # pon false si quieres actualizar filas existentes
 
   tasks:
-    - name: Asegurar carpeta de trabajo
-      ansible.builtin.file:
-        path: "{{ ruta_json_ctl }}"
-        state: directory
-        mode: "0755"
+    - name: Limpiar JSON antiguos (Para no repetir datos)
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
 
-    # --- venv por PEP 668 ---
-    - name: Instalar python3-venv (para crear entornos virtuales)
-      become: true
-      ansible.builtin.apt:
-        name: python3-venv
-        state: present
-        update_cache: true
-
-    - name: Crear virtualenv
-      ansible.builtin.command: python3 -m venv {{ venv_path }}
-      args:
-        creates: "{{ venv_path }}/bin/python"
-
-    - name: Actualizar pip dentro del venv
-      ansible.builtin.command: "{{ venv_path }}/bin/python -m pip install --upgrade pip"
-
-    - name: Instalar dependencias en el venv
-      ansible.builtin.command: "{{ venv_path }}/bin/pip install openpyxl"
-
-    # (Opcional) Solo si quieres desplegar/actualizar el script desde el playbook:
-    # Si ya lo tienes en esa ruta, puedes omitir esta tarea.
-    - name: Instalar/actualizar append_excel2.py (embebido)
-      ansible.builtin.copy:
+    - name: Crear Script Python (AUTOMÁTICO)
+      copy:
         dest: "{{ script_python }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
-          # ... pega aquí el contenido de tu append_excel2.py (el tuyo actual) ...
+          import sys, os, json
+          from openpyxl import Workbook, load_workbook
 
-    - name: Buscar los JSON de usuarios
-      ansible.builtin.find:
-        paths: "{{ ruta_json_ctl }}"
-        patterns: "info_*.json"
-        file_type: file
-      register: json_files
+          ex_p, j_p = sys.argv[1], sys.argv[2]
+          with open(j_p, 'r') as f: data = json.load(f)
+          
+          if os.path.exists(ex_p):
+              wb = load_workbook(ex_p)
+              ws = wb.active
+          else:
+              wb = Workbook()
+              ws = wb.active
+              ws.append(["Hostname", "Usuarios"])
 
-    - name: Ejecutar append_excel2.py usando el Python del venv
-      ansible.builtin.command: >
-        {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item.path }} {% if solo_anadir %}--append-only{% endif %}
-      loop: "{{ json_files.files }}"
-      register: excel_results
-      when: json_files.matched | int > 0
+          ws.append([data['inventory_hostname'], ", ".join(data['usuarios'])])
+          wb.save(ex_p)
 
-    - name: Mostrar resultados del script
-      ansible.builtin.debug:
-        msg: "{{ excel_results.results | map(attribute='stdout') | list }}"
-      when: excel_results is defined
+    - name: Preparar Python y Ejecutar
+      shell: |
+        python3 -m venv {{ venv_path }}
+        {{ venv_path }}/bin/pip install openpyxl
+        {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item }}
+      loop: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
+      
 ############################################################
 # 3) Copiar el Excel al recurso compartido ya MONTADO      #
 ############################################################
