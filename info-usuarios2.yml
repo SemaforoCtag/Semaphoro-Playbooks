@@ -57,7 +57,7 @@
   tasks:
     - name: Limpiar JSON antiguos (Para no repetir datos)
       file:
-        path: "{{ item.path }}"
+        path: "{{ item }}"
         state: absent
       with_items: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
 
@@ -89,7 +89,8 @@
         python3 -m venv {{ venv_path }}
         {{ venv_path }}/bin/pip install openpyxl
         {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item }}
-      loop: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
+      #loop: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
+      with_items: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
       
 ############################################################
 # 3) Copiar el Excel al recurso compartido ya MONTADO      #
