@@ -1,46 +1,23 @@
 ##########################################################
-# 1) Recoger usuarios (Linux/Windows) -> JSON -> fetch   #
+# 1) Recoger usuarios (Linux/Windows)                    #
 ##########################################################
 - name: Recoger usuarios no-servicio y traer JSON al controlador
   hosts: semaforos
   gather_facts: yes
   become: true
-  vars:
-    ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
-    ruta_json_ctl:    "/home/semaphore/Excels"
-    min_uid: 1000
 
-  tasks:
-    - name: Detectar SO
-      set_fact:
-        es_windows: "{{ ansible_os_family == 'Windows' }}"
+  pre_tasks:
+    - name: Limpiar JSON antiguos del controlador antes de empezar
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      with_fileglob:
+        - "/home/semaphore/Excels/info_*.json"
+      delegate_to: localhost
+      run_once: true
+      become: false
 
-    - name: Linux - Obtener usuarios
-      when: not es_windows
-      shell: "getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(nologin|false)/) { print $1 }'"
-      register: salida_linux
-      changed_when: false
-
-    - name: Windows - Obtener usuarios
-      when: es_windows
-      ansible.windows.win_shell: "Get-LocalUser | Where-Object { $_.Enabled } | Select-Object -ExpandProperty Name"
-      register: windows_user_groups
-      changed_when: false
-
-    - name: Guardar JSON en remoto
-      copy:
-        dest: "{{ ruta_json_remoto }}"
-        content: |
-          {
-            "inventory_hostname": "{{ inventory_hostname }}",
-            "usuarios": {{ (es_windows | ternary(windows_user_groups.stdout_lines | default([]), salida_linux.stdout_lines | default([]))) | to_json }}
-          }
-
-    - name: Traer JSON al controlador
-      fetch:
-        src: "{{ ruta_json_remoto }}"
-        dest: "{{ ruta_json_ctl }}/"
-        flat: true
+  # ... resto de tus tareas de fetch ...
 
 ##########################################################
 # 2) Localhost: Procesar Excel                           #
@@ -55,13 +32,7 @@
     venv_path:     "/home/semaphore/Excels/.venv"
 
   tasks:
-    - name: Limpiar JSON antiguos (Para no repetir datos)
-      file:
-        path: "{{ item }}"
-        state: absent
-      with_items: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
-
-    - name: Crear Script Python (AUTOMÁTICO)
+    - name: Crear Script Python
       copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -70,27 +41,37 @@
           import sys, os, json
           from openpyxl import Workbook, load_workbook
 
-          ex_p, j_p = sys.argv[1], sys.argv[2]
-          with open(j_p, 'r') as f: data = json.load(f)
-          
-          if os.path.exists(ex_p):
-              wb = load_workbook(ex_p)
-              ws = wb.active
-          else:
-              wb = Workbook()
-              ws = wb.active
-              ws.append(["Hostname", "Usuarios"])
+          def run():
+              ex_p, j_p = sys.argv[1], sys.argv[2]
+              with open(j_p, 'r') as f: 
+                  data = json.load(f)
+              
+              hn = data.get('inventory_hostname', 'Desconocido')
+              us = data.get('usuarios', [])
+              # Convertimos a string por si vienen objetos
+              us_str = ", ".join([str(u) for u in us])
 
-          ws.append([data['inventory_hostname'], ", ".join(data['usuarios'])])
-          wb.save(ex_p)
+              if os.path.exists(ex_p):
+                  wb = load_workbook(ex_p)
+                  ws = wb.active
+              else:
+                  wb = Workbook()
+                  ws = wb.active
+                  ws.append(["Hostname", "Usuarios"])
 
-    - name: Preparar Python y Ejecutar
+              ws.append([hn, us_str])
+              wb.save(ex_p)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar script para cada JSON
       shell: |
-        python3 -m venv {{ venv_path }}
-        {{ venv_path }}/bin/pip install openpyxl
+        [ -d {{ venv_path }} ] || python3 -m venv {{ venv_path }}
+        {{ venv_path }}/bin/pip install openpyxl --quiet
         {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item }}
-      #loop: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
-      with_items: "{{ query('fileglob', ruta_json_ctl + '/*.json') }}"
+      with_fileglob:
+        - "{{ ruta_json_ctl }}/info_*.json"
       
 ############################################################
 # 3) Copiar el Excel al recurso compartido ya MONTADO      #
