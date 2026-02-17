@@ -1,34 +1,20 @@
 ##########################################################
-# 1) Recoger usuarios (Linux/Windows) → JSON → fetch     #
+# 1) Recoger TODOS los usuarios y sus Grupos             #
 ##########################################################
-- name: Recoger usuarios no-servicio y traer JSON al controlador
+- name: Recoger usuarios y permisos
   hosts: semaforos
   gather_facts: yes
   become: true
-
   vars:
-    # Ruta donde se guarda el JSON temporalmente en el servidor remoto
     ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
-    # Ruta en tu servidor de Semaphore donde se centralizan los JSON
     ruta_json_ctl:    "/home/semaphore/Excels"
-    min_uid: 1000
 
   pre_tasks:
-    - name: LIMPIEZA - Borrar solo los JSON viejos antes de empezar
+    - name: Limpieza inicial
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
-      with_fileglob:
-        - "{{ ruta_json_ctl }}/info_*.json"
-      delegate_to: localhost
-      run_once: true
-      become: false
-
-    - name: Asegurar que existe la carpeta en el controlador
-      ansible.builtin.file:
-        path: "{{ ruta_json_ctl }}"
-        state: directory
-        mode: "0755"
+      with_fileglob: ["{{ ruta_json_ctl }}/info_*.json"]
       delegate_to: localhost
       run_once: true
       become: false
@@ -38,38 +24,48 @@
       ansible.builtin.set_fact:
         es_windows: "{{ ansible_os_family == 'Windows' }}"
 
-    - name: Linux - Obtener usuarios
+    # Linux: Formato "usuario:grupo1,grupo2"
+    - name: Linux - Obtener todos los usuarios y sus grupos
       when: not es_windows
-      ansible.builtin.shell: "getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(nologin|false)/) { print $1 }'"
-      register: salida_linux
+      ansible.builtin.shell: |
+        for u in $(cut -d: -f1 /etc/passwd); do
+          groups_list=$(id -Gn $u | tr ' ' ',')
+          echo "$u:$groups_list"
+        done
+      register: datos_linux
       changed_when: false
 
-    - name: Windows - Obtener usuarios
+    # Windows: Formato "usuario:grupo1,grupo2"
+    - name: Windows - Obtener todos los usuarios y sus grupos
       when: es_windows
-      ansible.windows.win_shell: "Get-LocalUser | Where-Object { $_.Enabled } | Select-Object -ExpandProperty Name"
-      register: windows_user_groups
+      ansible.windows.win_shell: |
+        Get-LocalUser | ForEach-Object {
+            $name = $_.Name
+            $groups = (Get-LocalGroup | Where-Object { (Get-LocalGroupMember -Group $_.Name).Name -contains "$env:COMPUTERNAME\$name" -or (Get-LocalGroupMember -Group $_.Name).Name -contains "AD-DOMAIN\$name" }).Name
+            "$name:$($groups -join ',')"
+        }
+      register: datos_windows
       changed_when: false
 
-    - name: Generar archivo JSON en el servidor remoto
+    - name: Generar JSON con Usuarios y Permisos
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
-        mode: "0644"
         content: |
           {
             "inventory_hostname": "{{ inventory_hostname }}",
-            "usuarios": {{ (es_windows | ternary(windows_user_groups.stdout_lines | default([]), salida_linux.stdout_lines | default([]))) | to_json }}
+            "datos": {{ (es_windows | ternary(datos_windows.stdout_lines, datos_linux.stdout_lines)) | to_json }}
           }
 
-    - name: Descargar JSON al controlador (Semaphore)
+    - name: Descargar JSON
       ansible.builtin.fetch:
         src: "{{ ruta_json_remoto }}"
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
 ##########################################################
-# 2) Localhost: Procesar JSONs y generar el Excel        #
+# 2) Localhost: Procesar y crear Excel con 3 columnas    #
 ##########################################################
-- name: Procesar datos localmente
+- name: Actualizar Excel
   hosts: localhost
   gather_facts: no
   vars:
@@ -79,7 +75,7 @@
     venv_path:     "/home/semaphore/Excels/.venv"
 
   tasks:
-    - name: Escribir Script Python de procesamiento
+    - name: Actualizar Script Python para 3 columnas
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -89,66 +85,47 @@
           from openpyxl import Workbook, load_workbook
 
           def run():
-              if len(sys.argv) < 3: return
-              excel_file = sys.argv[1]
-              json_file = sys.argv[2]
-              
-              with open(json_file, 'r') as f:
+              ex_p, j_p = sys.argv[1], sys.argv[2]
+              with open(j_p, 'r') as f:
                   data = json.load(f)
               
-              hostname = data.get('inventory_hostname', 'Desconocido')
-              lista_usuarios = data.get('usuarios', [])
-              usuarios_str = ", ".join([str(u) for u in lista_usuarios])
+              hn = data.get('inventory_hostname', 'Desconocido')
+              filas = data.get('datos', [])
 
-              if os.path.exists(excel_file):
-                  wb = load_workbook(excel_file)
+              if os.path.exists(ex_p):
+                  wb = load_workbook(ex_p)
                   ws = wb.active
               else:
                   wb = Workbook()
                   ws = wb.active
-                  ws.append(["Hostname", "Usuarios"])
+                  ws.append(["Hostname", "Usuario", "Grupos/Permisos"])
 
-              ws.append([hostname, usuarios_str])
-              wb.save(excel_file)
+              for linea in filas:
+                  if ':' in linea:
+                      user, groups = linea.split(':', 1)
+                      ws.append([hn, user, groups])
+              
+              wb.save(ex_p)
 
           if __name__ == "__main__":
               run()
 
-    - name: Crear entorno virtual y dependencias (Solo si no existe)
-      ansible.builtin.shell: |
-        python3 -m venv {{ venv_path }}
-        {{ venv_path }}/bin/pip install openpyxl --quiet
-      args:
-        creates: "{{ venv_path }}/bin/python"
-
-    - name: EJECUTAR SCRIPT - Generar Excel desde JSONs
+    - name: Ejecutar procesamiento
       ansible.builtin.shell: |
         {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item }}
       with_fileglob:
         - "{{ ruta_json_ctl }}/info_*.json"
-      register: python_run
-
-    - name: Verificar si se generó el Excel
-      ansible.builtin.stat:
-        path: "{{ ruta_excel }}"
-      register: excel_stat
-
-    - name: Fallo crítico si el Excel no existe
-      ansible.builtin.fail:
-        msg: "❌ ERROR: El Excel no se creó. Revisa si hay archivos .json en {{ ruta_json_ctl }}"
-      when: not excel_stat.stat.exists
 
 ##########################################################
-# 3) Copiar al recurso de red                            #
+# 3) Copiar al recurso de red (Igual que antes)          #
 ##########################################################
-- name: Exportar resultado
+- name: Copiar Inventario al recurso de red
   hosts: localhost
-  gather_facts: no
   tasks:
-    - name: Copiar al Share
+    - name: Copiar Excel al Share
       become: true
       ansible.builtin.copy:
         src: "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"
-        dest: "/mnt/ansible_share/Inventario_Usuarios_Equipos_DMZ.xlsx"
+        dest: "/mnt/ansible_share/Inventario_Usuarios_Completo.xlsx"
         mode: "0644"
         remote_src: true
