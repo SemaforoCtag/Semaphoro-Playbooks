@@ -1,28 +1,75 @@
 ##########################################################
-# 1) Recoger usuarios (Linux/Windows)                    #
+# 1) Recoger usuarios (Linux/Windows) → JSON → fetch     #
 ##########################################################
 - name: Recoger usuarios no-servicio y traer JSON al controlador
   hosts: semaforos
   gather_facts: yes
   become: true
 
+  vars:
+    ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
+    ruta_json_ctl:    "/home/semaphore/Excels"
+    min_uid: 1000
+
   pre_tasks:
-    - name: Limpiar JSON antiguos del controlador antes de empezar
+    - name: LIMPIEZA INICIAL - Borrar JSON antiguos en el controlador
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
       with_fileglob:
-        - "/home/semaphore/Excels/info_*.json"
+        - "{{ ruta_json_ctl }}/info_*.json"
       delegate_to: localhost
       run_once: true
       become: false
 
-  # ... resto de tus tareas de fetch ...
+    - name: Crear carpeta local para JSON (si no existe)
+      ansible.builtin.file:
+        path: "{{ ruta_json_ctl }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+      become: false
+
+  tasks:
+    - name: Detectar SO
+      ansible.builtin.set_fact:
+        es_windows: "{{ ansible_os_family == 'Windows' }}"
+
+    # ---------- RECOGIDA DE DATOS ----------
+    - name: Linux - Obtener usuarios
+      when: not es_windows
+      ansible.builtin.shell: "getent passwd | awk -F: '($3 >= {{ min_uid }}) && ($7 !~ /(nologin|false)/) { print $1 }'"
+      register: salida_linux
+      changed_when: false
+
+    - name: Windows - Obtener usuarios
+      when: es_windows
+      ansible.windows.win_shell: "Get-LocalUser | Where-Object { $_.Enabled } | Select-Object -ExpandProperty Name"
+      register: windows_user_groups
+      changed_when: false
+
+    # ---------- GENERACIÓN DE JSON REMOTO ----------
+    - name: Guardar datos en JSON en el host remoto
+      ansible.builtin.copy:
+        dest: "{{ ruta_json_remoto }}"
+        mode: "0644"
+        content: |
+          {
+            "inventory_hostname": "{{ inventory_hostname }}",
+            "usuarios": {{ (es_windows | ternary(windows_user_groups.stdout_lines | default([]), salida_linux.stdout_lines | default([]))) | to_json }}
+          }
+
+    - name: Traer JSON al controlador
+      ansible.builtin.fetch:
+        src: "{{ ruta_json_remoto }}"
+        dest: "{{ ruta_json_ctl }}/"
+        flat: true
 
 ##########################################################
-# 2) Localhost: Procesar Excel                           #
+# 2) Localhost: Procesar JSONs y crear/actualizar Excel  #
 ##########################################################
-- name: Actualizar Excel
+- name: Actualizar Excel en Localhost
   hosts: localhost
   gather_facts: no
   vars:
@@ -32,8 +79,8 @@
     venv_path:     "/home/semaphore/Excels/.venv"
 
   tasks:
-    - name: Crear Script Python
-      copy:
+    - name: Crear Script Python Robusto
+      ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
         content: |
@@ -42,13 +89,14 @@
           from openpyxl import Workbook, load_workbook
 
           def run():
+              if len(sys.argv) < 3: return
               ex_p, j_p = sys.argv[1], sys.argv[2]
-              with open(j_p, 'r') as f: 
+              
+              with open(j_p, 'r') as f:
                   data = json.load(f)
               
               hn = data.get('inventory_hostname', 'Desconocido')
               us = data.get('usuarios', [])
-              # Convertimos a string por si vienen objetos
               us_str = ", ".join([str(u) for u in us])
 
               if os.path.exists(ex_p):
@@ -65,52 +113,46 @@
           if __name__ == "__main__":
               run()
 
-    - name: Ejecutar script para cada JSON
-      shell: |
-        [ -d {{ venv_path }} ] || python3 -m venv {{ venv_path }}
+    - name: Asegurar entorno virtual y dependencias
+      ansible.builtin.shell: |
+        python3 -m venv {{ venv_path }}
         {{ venv_path }}/bin/pip install openpyxl --quiet
+      args:
+        creates: "{{ venv_path }}/bin/python"
+
+    - name: Ejecutar script para cada JSON (Crea el Excel)
+      ansible.builtin.shell: |
         {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item }}
       with_fileglob:
         - "{{ ruta_json_ctl }}/info_*.json"
-      
-############################################################
-# 3) Copiar el Excel al recurso compartido ya MONTADO      #
-############################################################
+      register: excel_exec
+
+    - name: Verificar si se procesó algún archivo
+      ansible.builtin.debug:
+        msg: "Se han procesado archivos JSON correctamente."
+      when: excel_exec.results | length > 0
+
+##########################################################
+# 3) Copiar el Excel al recurso compartido               #
+##########################################################
 - name: Copiar Inventario al recurso de red
   hosts: localhost
   gather_facts: no
-
   vars:
-    ruta_excel:  "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"   # mismo que en el play 2
-    mountpoint:  "/mnt/ansible_share"                                   # punto de montaje ya existente
-    destino:     "Inventario_Usuarios_Equipos_DMZ.xlsx"                           # nombre en el share
+    ruta_excel:  "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"
+    mountpoint:  "/mnt/ansible_share"
+    destino:     "Inventario_Usuarios_Equipos_DMZ.xlsx"
 
   tasks:
-    - name: Verificar que el Excel existe en local
+    - name: Verificar existencia del Excel antes de copiar
       ansible.builtin.stat:
         path: "{{ ruta_excel }}"
       register: excel_stat
 
-    - name: Fallar si no existe el Excel (revisa el play 2)
+    - name: Fallar si el Excel no se creó en el paso anterior
       ansible.builtin.fail:
-        msg: "❌ No existe {{ ruta_excel }}. Asegúrate de que el play 2 lo creó."
+        msg: "❌ ERROR: El archivo {{ ruta_excel }} no existe. El Play 2 no procesó ningún JSON."
       when: not excel_stat.stat.exists
-
-    - name: Verificar que el recurso está montado
-      ansible.builtin.stat:
-        path: "{{ mountpoint }}"
-      register: mount_stat
-
-    - name: Fallar si no está montado
-      ansible.builtin.fail:
-        msg: "❌ El recurso {{ mountpoint }} no está montado. Móntalo antes de copiar."
-      when: not mount_stat.stat.exists
-
-    - name: Crear carpeta destino si no existe
-      ansible.builtin.file:
-        path: "{{ mountpoint }}"
-        state: directory
-        mode: "0755"
 
     - name: Copiar Excel al recurso compartido
       become: true
@@ -118,9 +160,9 @@
         src: "{{ ruta_excel }}"
         dest: "{{ mountpoint }}/{{ destino }}"
         mode: "0644"
-        remote_src: true   # <-- el src ya está en esta máquina (localhost)
-      register: copy_excel
+        remote_src: true
+      register: copy_res
 
-    - name: Confirmación
+    - name: Confirmación Final
       ansible.builtin.debug:
-        msg: "✅ Copiado {{ ruta_excel }} -> {{ mountpoint }}/{{ destino }}"
+        msg: "✅ Proceso completado. Archivo copiado a {{ mountpoint }}/{{ destino }}"
