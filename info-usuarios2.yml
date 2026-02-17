@@ -127,6 +127,6 @@
       become: true
       ansible.builtin.copy:
         src: "/home/semaphore/Excels/Inventario_Usuarios_Completo.xlsx"
-        dest: "/mnt/ansible_share/Inventario_Usuarios_Permisos.xlsx"
+        dest: "/mnt/ansible_share/Inventario_Usuarios.xlsx"
         mode: "0644"
         remote_src: true
