@@ -10,7 +10,7 @@
     ruta_json_ctl:    "/home/semaphore/Excels"
 
   pre_tasks:
-    - name: Limpieza inicial
+    - name: Limpieza inicial de JSONs
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -24,7 +24,6 @@
       ansible.builtin.set_fact:
         es_windows: "{{ ansible_os_family == 'Windows' }}"
 
-    # Linux: Formato "usuario:grupo1,grupo2"
     - name: Linux - Obtener todos los usuarios y sus grupos
       when: not es_windows
       ansible.builtin.shell: |
@@ -35,19 +34,18 @@
       register: datos_linux
       changed_when: false
 
-    # Windows: Formato "usuario:grupo1,grupo2"
     - name: Windows - Obtener todos los usuarios y sus grupos
       when: es_windows
       ansible.windows.win_shell: |
         Get-LocalUser | ForEach-Object {
             $name = $_.Name
-            $groups = (Get-LocalGroup | Where-Object { (Get-LocalGroupMember -Group $_.Name).Name -contains "$env:COMPUTERNAME\$name" -or (Get-LocalGroupMember -Group $_.Name).Name -contains "AD-DOMAIN\$name" }).Name
+            $groups = (Get-LocalGroup | Where-Object { (Get-LocalGroupMember -Group $_.Name).Name -contains "$env:COMPUTERNAME\$name" }).Name
             "$name:$($groups -join ',')"
         }
       register: datos_windows
       changed_when: false
 
-    - name: Generar JSON con Usuarios y Permisos
+    - name: Generar JSON
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
         content: |
@@ -56,26 +54,26 @@
             "datos": {{ (es_windows | ternary(datos_windows.stdout_lines, datos_linux.stdout_lines)) | to_json }}
           }
 
-    - name: Descargar JSON
+    - name: Descargar JSON al controlador
       ansible.builtin.fetch:
         src: "{{ ruta_json_remoto }}"
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
 ##########################################################
-# 2) Localhost: Procesar y crear Excel con 3 columnas    #
+# 2) Localhost: Crear Excel con columna "Permisos"       #
 ##########################################################
-- name: Actualizar Excel
+- name: Procesar datos y generar Excel
   hosts: localhost
   gather_facts: no
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Usuarios_Completo.xlsx"
     script_python: "/home/semaphore/Excels/append_excel2.py"
     venv_path:     "/home/semaphore/Excels/.venv"
 
   tasks:
-    - name: Actualizar Script Python para 3 columnas
+    - name: Actualizar Script Python (Columna Permisos)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -98,34 +96,37 @@
               else:
                   wb = Workbook()
                   ws = wb.active
-                  ws.append(["Hostname", "Usuario", "Grupos/Permisos"])
+                  # AQUÍ HEMOS CAMBIADO EL NOMBRE DE LA COLUMNA
+                  ws.append(["Hostname", "Usuario", "Permisos"])
 
               for linea in filas:
                   if ':' in linea:
                       user, groups = linea.split(':', 1)
-                      ws.append([hn, user, groups])
+                      ws.append([hn, user, groups if groups else "sin grupos"])
               
               wb.save(ex_p)
 
           if __name__ == "__main__":
               run()
 
-    - name: Ejecutar procesamiento
+    - name: Ejecutar script para cada JSON
       ansible.builtin.shell: |
+        [ -d {{ venv_path }} ] || python3 -m venv {{ venv_path }}
+        {{ venv_path }}/bin/pip install openpyxl --quiet
         {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ item }}
       with_fileglob:
         - "{{ ruta_json_ctl }}/info_*.json"
 
 ##########################################################
-# 3) Copiar al recurso de red (Igual que antes)          #
+# 3) Copiar al recurso de red                            #
 ##########################################################
-- name: Copiar Inventario al recurso de red
+- name: Exportar Inventario Final
   hosts: localhost
   tasks:
     - name: Copiar Excel al Share
       become: true
       ansible.builtin.copy:
-        src: "/home/semaphore/Excels/Inventario_Equipos_usuarios.xlsx"
-        dest: "/mnt/ansible_share/Inventario_Usuarios_Completo.xlsx"
+        src: "/home/semaphore/Excels/Inventario_Usuarios_Completo.xlsx"
+        dest: "/mnt/ansible_share/Inventario_Usuarios_Permisos.xlsx"
         mode: "0644"
         remote_src: true
