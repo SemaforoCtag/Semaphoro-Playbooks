@@ -1,0 +1,39 @@
+---
+- name: Auditoría Profesional de Puertos y Servicios
+  hosts: semaforos
+  become: yes          # Fundamental para leer nombres de procesos
+  gather_facts: no     # Más rápido, no necesitamos info del OS para esto
+
+  tasks:
+    - name: "PASO 1: Capturar puertos en escucha (TCP/UDP)"
+      # Extraemos: Protocolo, Puerto Local y Proceso
+      ansible.builtin.shell: |
+        ss -tunlp | grep LISTEN | awk '{print $1, $5, $7}'
+      register: raw_network_data
+      changed_when: false
+      ignore_errors: yes
+
+    - name: "PASO 2: Procesar datos de red"
+      # Usamos Jinja2 para limpiar la salida y crear una lista de diccionarios
+      set_fact:
+        servicios_activos: >-
+          {% set lista = [] %}
+          {% for line in raw_network_data.stdout_lines %}
+          {%   set partes = line.split() %}
+          {%   set proto = partes[0] %}
+          {%   set puerto = partes[1] | regex_replace('.*:', '') %}
+          {%   set proceso = partes[2] | regex_replace('users:\(\("', '') | regex_replace('".*', '') %}
+          {%   set _ = lista.append({'protocolo': proto, 'puerto': puerto, 'proceso': proceso}) %}
+          {% endfor %}
+          {{ lista | unique }}
+
+    - name: "PASO 3: Informe visual por pantalla"
+      ansible.builtin.debug:
+        msg: |
+          REPORTE DE SERVICIOS - {{ inventory_hostname }}
+          ----------------------------------------------
+          {% for svc in servicios_activos %}
+          - [{{ svc.protocolo | upper }}] Puerto: {{ svc.puerto.ljust(6) }} -> Servicio: {{ svc.proceso }}
+          {% endfor %}
+          ----------------------------------------------
+          Total servicios detectados: {{ servicios_activos | length }}
