@@ -6,8 +6,8 @@
 
   tasks:
     - name: "PASO 1: Capturar puertos en escucha"
-      # Usamos coma como separador para facilitar el split posterior
-      ansible.builtin.shell: "ss -tunlp | grep LISTEN | awk '{print $1\",\"$5\",\"$7}'"
+      # Usamos un pipe (|) para que awk no tenga problemas con las comas
+      ansible.builtin.shell: "ss -tunlp | grep LISTEN | awk '{print $1\"|\"$5\"|\"$7}'"
       register: raw_network_data
       changed_when: false
 
@@ -17,12 +17,20 @@
 
     - name: "PASO 3: Parsear lineas"
       set_fact:
-        servicios_lista: "{{ servicios_lista + [{'protocolo': item.split(',')[0], 'puerto': item.split(',')[-1].split(':')[-1], 'proceso': item.split('\"')[1] | default('desconocido')}] }}"
+        servicios_lista: >-
+          {{ 
+            servicios_lista + 
+            [{
+              'protocolo': item.split('|')[0],
+              'puerto': item.split('|')[1].split(':')[-1],
+              'proceso': item.split('"')[1] if '"' in item else 'desconocido'
+            }] 
+          }}
       loop: "{{ raw_network_data.stdout_lines }}"
       when: 
         - raw_network_data.stdout_lines is defined
-        - item.split(',') | length >= 3
-        - '\"' in item
+        - item.split('|') | length >= 3
+        - item is search('"')
 
     - name: "PASO 4: Informe visual final"
       ansible.builtin.debug:
