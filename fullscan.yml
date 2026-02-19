@@ -6,35 +6,31 @@
 
   tasks:
     - name: "PASO 1: Capturar puertos en escucha"
-      # Extraemos solo lo necesario: Protocolo, Puerto Local y Proceso
-      ansible.builtin.shell: "ss -tunlp | grep LISTEN | awk '{print $1, $5, $7}'"
+      # Usamos un delimitador claro (coma) para que no haya dudas al separar
+      ansible.builtin.shell: "ss -tunlp | grep LISTEN | awk '{print $1\",\"$5\",\"$7}'"
       register: raw_network_data
       changed_when: false
 
-    - name: "PASO 2: Procesar datos de red"
+    - name: "PASO 2: Inicializar lista de servicios"
       set_fact:
-        # Forzamos la conversión a YAML real para que el Paso 3 reconozca los atributos
-        servicios_activos: >-
-          {% set lista = [] %}
-          {% for line in raw_network_data.stdout_lines %}
-            {% set partes = line.split() %}
-            {% if partes | length >= 3 %}
-              {% set proto = partes[0] %}
-              {% set puerto = partes[1].split(':')[-1] %}
-              {% set proceso = partes[2].split('"')[1] if '"' in partes[2] else 'desconocido' %}
-              {% set _ = lista.append({'protocolo': proto, 'puerto': puerto, 'proceso': proceso}) %}
-            {% endif %}
-          {% endfor %}
-          {{ lista | to_yaml }}
+        servicios_lista: []
 
-    - name: "PASO 3: Informe visual por pantalla"
+    - name: "PASO 3: Parsear líneas una a una"
+      set_fact:
+        servicios_lista: "{{ servicios_lista + [{'protocolo': item.split(',')[0], 'puerto': item.split(',')[-1].split(':')[-1], 'proceso': item.split('\"')[1] | default('desconocido')}] }}"
+      loop: "{{ raw_network_data.stdout_lines }}"
+      when: 
+        - raw_network_data.stdout_lines | length > 0
+        - '"' in item # Solo procesa si hay un nombre de proceso entre comillas
+
+    - name: "PASO 4: Informe visual final"
       ansible.builtin.debug:
         msg: |
           REPORTE DE SERVICIOS - {{ inventory_hostname }}
           ----------------------------------------------
-          {% for svc in servicios_activos | from_yaml %}
+          {% for svc in servicios_lista %}
           - [{{ '%-3s' | format(svc.protocolo | upper) }}] Puerto: {{ '%-6s' | format(svc.puerto) }} -> Servicio: {{ svc.proceso }}
           {% endfor %}
           ----------------------------------------------
-          Total servicios detectados: {{ (servicios_activos | from_yaml) | length }}
-      when: servicios_activos is defined
+          Total servicios detectados: {{ servicios_lista | length }}
+      when: servicios_lista | length > 0
