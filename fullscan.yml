@@ -1,5 +1,4 @@
 ---
----
 - name: Auditoría Profesional de Puertos y Servicios
   hosts: semaforos
   become: yes
