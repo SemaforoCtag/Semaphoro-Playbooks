@@ -1,12 +1,12 @@
 ---
-- name: Auditoría Profesional de Puertos y Servicios
+- name: Auditoria Profesional de Puertos y Servicios
   hosts: semaforos
   become: yes
   gather_facts: no
 
   tasks:
     - name: "PASO 1: Capturar puertos en escucha"
-      # Usamos awk para normalizar los espacios y que sea fácil de separar
+      # Extraemos Protocolo, Puerto Local y Proceso
       ansible.builtin.shell: "ss -tunlp | grep LISTEN | awk '{print $1, $5, $7}'"
       register: raw_network_data
       changed_when: false
@@ -20,7 +20,6 @@
             {% if partes | length >= 3 %}
               {% set proto = partes[0] %}
               {% set puerto = partes[1].split(':')[-1] %}
-              {# Limpiamos el nombre del proceso que viene como users:(("nombre",... #}
               {% set proceso_sucio = partes[2].split('"')[1] if '"' in partes[2] else 'desconocido' %}
               {% set _ = lista.append({'protocolo': proto, 'puerto': puerto, 'proceso': proceso_sucio}) %}
             {% endif %}
@@ -33,8 +32,8 @@
           REPORTE DE SERVICIOS - {{ inventory_hostname }}
           ----------------------------------------------
           {% for svc in servicios_activos %}
-          - [{{ svc.protocolo | upper }}] Puerto: {{ svc.puerto | string | ljust(6) }} -> Servicio: {{ svc.proceso }}
+          - [{{ '%-3s' | format(svc.protocolo | upper) }}] Puerto: {{ '%-6s' | format(svc.puerto) }} -> Servicio: {{ svc.proceso }}
           {% endfor %}
           ----------------------------------------------
           Total servicios detectados: {{ servicios_activos | length }}
-      when: servicios_activos | length > 0
+      when: servicios_activos is defined and servicios_activos | length > 0
