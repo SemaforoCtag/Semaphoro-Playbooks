@@ -1,27 +1,25 @@
 ---
-- name: Auditoria Profesional de Puertos y Servicios
+- name: Auditoria de Puertos y Servicios
   hosts: semaforos
   become: yes
   gather_facts: no
 
   tasks:
-    - name: "PASO 1: Capturar puertos en escucha"
-      # Usamos un pipe (|) para que awk no tenga problemas con las comas
+    - name: "Capturar datos de red"
       ansible.builtin.shell: "ss -tunlp | grep LISTEN | awk '{print $1\"|\"$5\"|\"$7}'"
       register: raw_network_data
       changed_when: false
 
-    - name: "PASO 2: Inicializar lista de servicios"
+    - name: "Inicializar lista"
       set_fact:
         servicios_lista: []
 
-    - name: "PASO 3: Parsear lineas"
+    - name: "Procesar información"
       set_fact:
         servicios_lista: >-
           {{ 
             servicios_lista + 
             [{
-              'protocolo': item.split('|')[0],
               'puerto': item.split('|')[1].split(':')[-1],
               'proceso': item.split('"')[1] if '"' in item else 'desconocido'
             }] 
@@ -32,14 +30,11 @@
         - item.split('|') | length >= 3
         - item is search('"')
 
-    - name: "PASO 4: Informe visual final"
+    - name: "INFORME DE SERVICIOS ACTIVOS"
       ansible.builtin.debug:
         msg: |
-          REPORTE DE SERVICIOS - {{ inventory_hostname }}
-          ----------------------------------------------
+          SERVICIOS EN {{ inventory_hostname }}:
           {% for svc in servicios_lista %}
-          - [{{ '%-3s' | format(svc.protocolo | upper) }}] Puerto: {{ '%-6s' | format(svc.puerto) }} -> Servicio: {{ svc.proceso }}
+          Port: {{ '%-6s' | format(svc.puerto) }} -> Service: {{ svc.proceso }}
           {% endfor %}
-          ----------------------------------------------
-          Total servicios detectados: {{ servicios_lista | length }}
       when: servicios_lista | length > 0
