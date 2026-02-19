@@ -1,0 +1,29 @@
+---
+- name: Instalar 7-Zip en sistemas Linux
+  hosts: all
+  become: true  # Necesario para privilegios de root
+  tasks:
+
+    - name: Instalar p7zip en derivados de Debian (Ubuntu, Mint, etc.)
+      ansible.builtin.apt:
+        name: 
+          - p7zip-full
+          - p7zip-rar  # Opcional, para soporte de archivos .rar
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Instalar p7zip en derivados de RedHat (CentOS, Fedora, RHEL)
+      ansible.builtin.dnf:
+        name: p7zip
+        state: present
+      when: ansible_os_family == "RedHat"
+
+    - name: Verificar la instalación
+      ansible.builtin.command: 7z --help
+      register: result
+      changed_when: false
+
+    - name: Mostrar versión instalada
+      ansible.builtin.debug:
+        msg: "7-Zip se ha instalado correctamente: {{ result.stdout_lines[1] }}"
