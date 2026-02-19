@@ -5,54 +5,43 @@
 
 - name: Escaneo de red en busca de puertos de DB
   hosts: semaforos
-  gather_facts: yes
+  gather_facts: no
+  vars:
+    # Definimos la lista de servicios para centralizar el mantenimiento
+    servicios_db:
+      - { nombre: 'MySQL', puerto: 3306 }
+      - { nombre: 'PostgreSQL', puerto: 5432 }
+      - { nombre: 'SQL Server', puerto: 1433 }
+      - { nombre: 'Oracle', puerto: 1521 }
+      - { nombre: 'MongoDB', puerto: 27017 }
 
   tasks:
-    - name: Verificar puertos de MySQL
+    - name: "Verificando disponibilidad de puertos"
       ansible.builtin.wait_for:
         host: "{{ ansible_host }}"
-        port: 3306
-        timeout: 4
-      register: mysql_port
+        port: "{{ item.puerto }}"
+        timeout: 2
+        msg: "Timeout"
+      loop: "{{ servicios_db }}"
+      register: scan_results
       ignore_errors: yes
+      # no_log evita que se muestre el "FAILED" gigante en rojo por cada puerto cerrado
+      no_log: true
 
-    - name: Verificar puertos de PostgreSQL
-      ansible.builtin.wait_for:
-        host: "{{ ansible_host }}"
-        port: 5432
-        timeout: 4
-      register: postgres_port
-      ignore_errors: yes
+    - name: "RESUMEN DE ESTADO DE BASES DE DATOS"
+      ansible.builtin.debug:
+        msg: >
+          {{ item.item.nombre }} ({{ item.item.puerto }}): 
+          {{ 'ABIERTO' if item.failed is not defined or not item.failed else 'CERRADO' }}
+      loop: "{{ scan_results.results }}"
+      loop_control:
+        # Esto hace que en el log solo veas el nombre de la DB, no todo el objeto JSON
+        label: "{{ item.item.nombre }}"
 
-    - name: Verificar puertos de SQL Server
-      ansible.builtin.wait_for:
-        host: "{{ ansible_host }}"
-        port: 1433
-        timeout: 4
-      register: sqlserver_port
-      ignore_errors: yes
-
-    - name: Verificar puertos de Oracle
-      ansible.builtin.wait_for:
-        host: "{{ ansible_host }}"
-        port: 1521
-        timeout: 4
-      register: oracle_port
-      ignore_errors: yes
-
-    - name: Verificar puertos de MongoDB
-      ansible.builtin.wait_for:
-        host: "{{ ansible_host }}"
-        port: 27017
-        timeout: 4
-      register: mongodb_port
-      ignore_errors: yes
-
-    - name: Consolidar puertos abiertos
+    - name: "Consolidar puertos abiertos en una variable (Opcional)"
       set_fact:
-        puertos_db:
-          mysql:      "{{ mysql_port    is defined and mysql_port   .elapsed < 3 }}"
-          postgresql: "{{ postgres_port is defined and postgres_port.elapsed < 3 }}"
-          sqlserver:  "{{ sqlserver_port is defined and sqlserver_port.elapsed < 3 }}"
-          oracle:     "{{ oracle_port   is defined and oracle_port  .elapsed < 3 }}"
-          mongodb:    "{{ mongodb_port  is defined and mongodb_port .elapsed < 3 }}"
+        puertos_encontrados: "{{ scan_results.results | map(attribute='item.nombre') | list }}"
+      when: not item.failed
+      loop: "{{ scan_results.results }}"
+      loop_control:
+        label: "{{ item.item.nombre }}"
