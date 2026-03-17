@@ -1,40 +1,188 @@
 ---
+########################################################################
+# 1. Linux (semaforos): escanear servicios/puertos → JSON → fetch      #
+########################################################################
 - name: Auditoria de Puertos y Servicios
   hosts: semaforos
   become: yes
-  gather_facts: no
+  gather_facts: yes   # para tener inventory_hostname, SO, IP, etc.
+
+  vars:
+    ruta_json_remoto: "/tmp/info_servicios_{{ inventory_hostname }}.json"
+    ruta_json_ctl:    "/home/semaphore/Excels"
+
+  pre_tasks:
+    - name: Crear carpeta local para los JSON
+      ansible.builtin.file:
+        path: "{{ ruta_json_ctl }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+      become: false
 
   tasks:
-    - name: "Capturar datos de red"
-      ansible.builtin.shell: "ss -tunlp | grep LISTEN | awk '{print $1\"|\"$5\"|\"$7}'"
+    - name: "Capturar datos de red (PROTO | IP:PUERTO | PROCESO)"
+      ansible.builtin.shell: |
+        ss -tunlp | grep LISTEN | awk '{print $1"|"$5"|"$7}'
       register: raw_network_data
       changed_when: false
+      failed_when: false
 
-    - name: "Inicializar lista"
-      set_fact:
+    - name: "Inicializar lista de servicios"
+      ansible.builtin.set_fact:
         servicios_lista: []
 
-    - name: "Procesar información"
-      set_fact:
+    - name: "Procesar información de puertos y servicios"
+      ansible.builtin.set_fact:
         servicios_lista: >-
-          {{ 
-            servicios_lista + 
+          {{
+            servicios_lista +
             [{
-              'puerto': item.split('|')[1].split(':')[-1],
-              'proceso': item.split('"')[1] if '"' in item else 'desconocido'
-            }] 
+              'protocolo': item.split('|')[0],
+              'puerto':    item.split('|')[1].split(':')[-1],
+              'proceso': (
+                  item.split('"')[1]
+                  if '"' in item
+                  else (
+                      item.split('|')[2]
+                      if (item.split('|') | length) >= 3
+                      else 'desconocido'
+                  )
+              )
+            }]
           }}
-      loop: "{{ raw_network_data.stdout_lines }}"
-      when: 
+      loop: "{{ raw_network_data.stdout_lines | default([]) }}"
+      when:
         - raw_network_data.stdout_lines is defined
-        - item.split('|') | length >= 3
-        - item is search('"')
+        - item.split('|') | length >= 2
 
-    - name: "INFORME DE SERVICIOS ACTIVOS"
+    - name: "DEBUG – Informe de servicios activos (opcional)"
       ansible.builtin.debug:
         msg: |
           SERVICIOS EN {{ inventory_hostname }}:
           {% for svc in servicios_lista %}
-          Port: {{ '%-6s' | format(svc.puerto) }} -> Service: {{ svc.proceso }}
+          Proto: {{ '%-4s' | format(svc.protocolo) }}  Port: {{ '%-6s' | format(svc.puerto) }} -> Service: {{ svc.proceso }}
           {% endfor %}
       when: servicios_lista | length > 0
+
+    - name: Guardar facts + servicios en JSON en el host
+      ansible.builtin.copy:
+        content: |
+          {{
+            ansible_facts
+            | combine({
+                'inventory_hostname': inventory_hostname,
+                'servicios_lista': servicios_lista
+              })
+            | to_nice_json
+          }}
+        dest: "{{ ruta_json_remoto }}"
+        force: yes
+
+    - name: Traer JSON al nodo de control
+      ansible.builtin.fetch:
+        src: "{{ ruta_json_remoto }}"
+        dest: "{{ ruta_json_ctl }}/"
+        flat: true
+
+########################################################################
+# 2) Localhost: Procesar datos y generar Excel de Servicios DMZ        #
+########################################################################
+- name: Procesar datos y generar Excel de Servicios
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    ruta_excel:    "/home/semaphore/Excels/Servicios_Servidores_DMZ.xlsx"
+    script_python: "/home/semaphore/Excels/servicios_excel.py"
+    venv_path:     "/home/semaphore/Excels/.venv_servicios"
+
+  tasks:
+    - name: Actualizar Script Python (Excel Servicios_Servidores_DMZ)
+      ansible.builtin.copy:
+        dest: "{{ script_python }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import sys, os, json
+          from openpyxl import Workbook, load_workbook
+
+          def crear_o_abrir_excel(ruta_excel):
+              if os.path.exists(ruta_excel):
+                  wb = load_workbook(ruta_excel)
+                  ws = wb.active
+              else:
+                  wb = Workbook()
+                  ws = wb.active
+                  ws.title = "Servicios_DMZ"
+                  # Cabeceras del Excel
+                  ws.append([
+                      "Hostname",
+                      "SO",
+                      "IP",
+                      "Protocolo",
+                      "Puerto",
+                      "Proceso"
+                  ])
+              return wb, ws
+
+          def run():
+              if len(sys.argv) != 3:
+                  print(f"Uso: {sys.argv[0]} <ruta_excel> <ruta_json>")
+                  sys.exit(1)
+
+              ex_p, j_p = sys.argv[1], sys.argv[2]
+
+              with open(j_p, 'r') as f:
+                  data = json.load(f)
+
+              hn = data.get('inventory_hostname', 'Desconocido')
+              so = data.get("ansible_distribution", "") + " " + str(data.get("ansible_distribution_version", ""))
+              ip = ""
+              # Intentar sacar IP principal
+              if "ansible_default_ipv4" in data and "address" in data["ansible_default_ipv4"]:
+                  ip = data["ansible_default_ipv4"]["address"]
+
+              servicios = data.get('servicios_lista', [])
+
+              wb, ws = crear_o_abrir_excel(ex_p)
+
+              for svc in servicios:
+                  proto  = svc.get('protocolo', '')
+                  puerto = svc.get('puerto', '')
+                  proc   = svc.get('proceso', '')
+                  ws.append([hn, so, ip, proto, puerto, proc])
+
+              wb.save(ex_p)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar script para cada JSON de servicios
+      ansible.builtin.shell: |
+        [ -d {{ venv_path }} ] || python3 -m venv {{ venv_path }}
+        {{ venv_path }}/bin/pip install openpyxl --quiet
+        for json_file in {{ ruta_json_ctl }}/info_servicios_*.json; do
+          [ -f "$json_file" ] || continue
+          {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} "$json_file"
+        done
+      args:
+        executable: /bin/bash
+
+##########################################################
+# 3) Copiar Excel al recurso de red                      #
+##########################################################
+- name: Exportar Excel de Servicios a recurso de red
+  hosts: localhost
+  gather_facts: no
+
+  tasks:
+    - name: Copiar Excel al Share
+      become: true
+      ansible.builtin.copy:
+        src: "/home/semaphore/Excels/Servicios_Servidores_DMZ.xlsx"
+        dest: "/mnt/ansible_share/Servicios_Servidores_DMZ.xlsx"
+        mode: "0644"
+        remote_src: true
