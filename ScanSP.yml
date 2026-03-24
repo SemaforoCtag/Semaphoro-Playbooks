@@ -5,7 +5,7 @@
 - name: Auditoria de Puertos y Servicios
   hosts: semaforos
   become: yes
-  gather_facts: yes   # para tener inventory_hostname, SO, IP, etc.
+  gather_facts: yes   # para tener ansible_hostname, SO, IP, etc.
 
   vars:
     ruta_json_remoto: "/tmp/info_servicios_{{ inventory_hostname }}.json"
@@ -88,7 +88,7 @@
 
 
 ########################################################################
-# 2) Localhost: Procesar TODOS los JSON y generar Excel “1 línea/host” #
+# 2) Localhost: generar Excel “1 línea por host (Hostname/IP/SO)”      #
 ########################################################################
 - name: Procesar datos y generar Excel de Servicios (Resumen por host)
   hosts: localhost
@@ -255,7 +255,7 @@
               # Congelar cabecera
               ws.freeze_panes = "A2"
 
-              # Ajustar anchos
+              # Ajustar anchos de columna
               col_widths = {}
               for row in ws.iter_rows(values_only=True):
                   for idx, value in enumerate(row, start=1):
@@ -305,13 +305,6 @@
 
           if __name__ == "__main__":
               run()
-    - name: Ejecutar script agregando TODOS los JSON
-      ansible.builtin.shell: |
-        [ -d {{ venv_path }} ] || python3 -m venv {{ venv_path }}
-        {{ venv_path }}/bin/pip install openpyxl --quiet
-        {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}
-      args:
-        executable: /bin/bash
 
     - name: Ejecutar script agregando TODOS los JSON
       ansible.builtin.shell: |
