@@ -102,6 +102,17 @@
 
   tasks:
     - name: Actualizar Script Python (Excel Servicios_Servidores_DMZ)
+  hosts: localhost
+  gather_facts: no
+
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    ruta_excel:    "/home/semaphore/Excels/Servicios_Servidores_DMZ.xlsx"
+    script_python: "/home/semaphore/Excels/servicios_excel.py"
+    venv_path:     "/home/semaphore/Excels/.venv_servicios"
+
+  tasks:
+    - name: Actualizar Script Python (Excel Servicios_Servidores_DMZ)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -109,16 +120,16 @@
           #!/usr/bin/env python3
           import sys, os, json
           from glob import glob
-          from collections import defaultdict
           from openpyxl import Workbook
           from openpyxl.styles import Font, PatternFill, Alignment
           from openpyxl.worksheet.table import Table, TableStyleInfo
 
+          # Ahora: Hostname real, IP, SO, Servicios compactados
           CABECERAS = [
               "Hostname",
-              "SO",
               "IP",
-              "Servicios"  # todos los puertos/servicios compactados
+              "SO",
+              "Servicios"
           ]
 
           def cargar_datos_json(directorio_json):
@@ -126,8 +137,8 @@
               Lee todos los info_servicios_*.json del directorio y
               devuelve un diccionario:
                 host -> {
-                    'so': ...,
                     'ip': ...,
+                    'so': ...,
                     'servicios': set((proto, puerto, proceso))
                 }
               """
@@ -149,8 +160,15 @@
                       print(f"[WARN] No se pudo leer {ruta}: {e}")
                       continue
 
-                  hn = data.get("inventory_hostname", "Desconocido")
-                  so = data.get("ansible_distribution", "") + " " + str(data.get("ansible_distribution_version", ""))
+                  # Preferimos el hostname real del sistema
+                  hn = data.get("ansible_hostname") or data.get("inventory_hostname") or "Desconocido"
+
+                  # SO: distribución + versión si están disponibles
+                  distro = data.get("ansible_distribution", "")
+                  version = str(data.get("ansible_distribution_version", "") or "")
+                  so = (distro + " " + version).strip()
+
+                  # IP principal si existe
                   ip = ""
                   if "ansible_default_ipv4" in data and "address" in data["ansible_default_ipv4"]:
                       ip = data["ansible_default_ipv4"]["address"]
@@ -159,10 +177,16 @@
 
                   if hn not in hosts:
                       hosts[hn] = {
-                          "so": so,
                           "ip": ip,
+                          "so": so,
                           "servicios": set()
                       }
+
+                  # Por si el mismo host aparece en varios JSON y en uno viene el SO/IP mejor
+                  if not hosts[hn]["ip"] and ip:
+                      hosts[hn]["ip"] = ip
+                  if not hosts[hn]["so"] and so:
+                      hosts[hn]["so"] = so
 
                   for svc in servicios:
                       proto  = svc.get("protocolo", "")
@@ -186,8 +210,8 @@
               # Filas: una por host
               for hostname in sorted(hosts.keys()):
                   info = hosts[hostname]
-                  so = info["so"]
-                  ip = info["ip"]
+                  ip = info.get("ip", "")
+                  so = info.get("so", "")
 
                   # Ordenamos servicios por puerto y luego proceso
                   servicios_ordenados = sorted(
@@ -200,7 +224,7 @@
                       for proto, puerto, proc in servicios_ordenados
                   )
 
-                  ws.append([hostname, so, ip, servicios_str])
+                  ws.append([hostname, ip, so, servicios_str])
 
               # Dar formato a cabeceras
               header_fill = PatternFill(
@@ -273,6 +297,14 @@
 
           if __name__ == "__main__":
               run()
+
+    - name: Ejecutar script agregando TODOS los JSON
+      ansible.builtin.shell: |
+        [ -d {{ venv_path }} ] || python3 -m venv {{ venv_path }}
+        {{ venv_path }}/bin/pip install openpyxl --quiet
+        {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}
+      args:
+        executable: /bin/bash
 
     - name: Ejecutar script agregando TODOS los JSON
       ansible.builtin.shell: |
