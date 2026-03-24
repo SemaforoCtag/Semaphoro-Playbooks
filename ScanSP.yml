@@ -88,9 +88,9 @@
 
 
 ########################################################################
-# 2) Localhost: Procesar datos y generar Excel de Servicios DMZ        #
+# 2) Localhost: Procesar TODOS los JSON y generar Excel “1 línea/host” #
 ########################################################################
-- name: Procesar datos y generar Excel de Servicios
+- name: Procesar datos y generar Excel de Servicios (Resumen por host)
   hosts: localhost
   gather_facts: no
 
@@ -108,7 +108,9 @@
         content: |
           #!/usr/bin/env python3
           import sys, os, json
-          from openpyxl import Workbook, load_workbook
+          from glob import glob
+          from collections import defaultdict
+          from openpyxl import Workbook
           from openpyxl.styles import Font, PatternFill, Alignment
           from openpyxl.worksheet.table import Table, TableStyleInfo
 
@@ -116,42 +118,112 @@
               "Hostname",
               "SO",
               "IP",
-              "Protocolo",
-              "Puerto",
-              "Proceso"
+              "Servicios"  # todos los puertos/servicios compactados
           ]
 
-          def crear_o_abrir_excel(ruta_excel):
-              if os.path.exists(ruta_excel):
-                  wb = load_workbook(ruta_excel)
-                  ws = wb.active
-                  # Comprobar si ya tiene cabeceras, si no, añadirlas
-                  if ws.max_row == 0:
-                      ws.title = "Servicios_DMZ"
-                      ws.append(CABECERAS)
-              else:
-                  wb = Workbook()
-                  ws = wb.active
-                  ws.title = "Servicios_DMZ"
-                  ws.append(CABECERAS)
-              return wb, ws
+          def cargar_datos_json(directorio_json):
+              """
+              Lee todos los info_servicios_*.json del directorio y
+              devuelve un diccionario:
+                host -> {
+                    'so': ...,
+                    'ip': ...,
+                    'servicios': set((proto, puerto, proceso))
+                }
+              """
+              patrones = [
+                  os.path.join(directorio_json, "info_servicios_*.json"),
+                  os.path.join(directorio_json, "info_servicios_*.JSON"),
+              ]
+              ficheros = []
+              for p in patrones:
+                  ficheros.extend(glob(p))
 
-          def aplicar_estilo_cabeceras(ws):
+              hosts = {}
+
+              for ruta in ficheros:
+                  try:
+                      with open(ruta, "r") as f:
+                          data = json.load(f)
+                  except Exception as e:
+                      print(f"[WARN] No se pudo leer {ruta}: {e}")
+                      continue
+
+                  hn = data.get("inventory_hostname", "Desconocido")
+                  so = data.get("ansible_distribution", "") + " " + str(data.get("ansible_distribution_version", ""))
+                  ip = ""
+                  if "ansible_default_ipv4" in data and "address" in data["ansible_default_ipv4"]:
+                      ip = data["ansible_default_ipv4"]["address"]
+
+                  servicios = data.get("servicios_lista", [])
+
+                  if hn not in hosts:
+                      hosts[hn] = {
+                          "so": so,
+                          "ip": ip,
+                          "servicios": set()
+                      }
+
+                  for svc in servicios:
+                      proto  = svc.get("protocolo", "")
+                      puerto = svc.get("puerto", "")
+                      proc   = svc.get("proceso", "")
+                      hosts[hn]["servicios"].add((proto, str(puerto), proc))
+
+              return hosts
+
+          def crear_excel_resumen(ruta_excel, hosts):
+              """
+              Crea SIEMPRE un Excel nuevo con 1 línea por host.
+              """
+              wb = Workbook()
+              ws = wb.active
+              ws.title = "Servicios_por_Host"
+
+              # Cabeceras
+              ws.append(CABECERAS)
+
+              # Filas: una por host
+              for hostname in sorted(hosts.keys()):
+                  info = hosts[hostname]
+                  so = info["so"]
+                  ip = info["ip"]
+
+                  # Ordenamos servicios por puerto y luego proceso
+                  servicios_ordenados = sorted(
+                      list(info["servicios"]),
+                      key=lambda x: (x[1], x[2])
+                  )
+                  # Formato: "tcp 22 (sshd), tcp 443 (nginx)"
+                  servicios_str = ", ".join(
+                      f"{proto} {puerto} ({proc})"
+                      for proto, puerto, proc in servicios_ordenados
+                  )
+
+                  ws.append([hostname, so, ip, servicios_str])
+
+              # Dar formato a cabeceras
               header_fill = PatternFill(
-                  start_color="FFD966",  # amarillo suave
+                  start_color="FFD966",
                   end_color="FFD966",
                   fill_type="solid"
               )
               header_font = Font(bold=True)
               header_alignment = Alignment(horizontal="center", vertical="center")
 
-              for cell in ws[1]:  # primera fila (cabecera)
+              for cell in ws[1]:
                   cell.fill = header_fill
                   cell.font = header_font
                   cell.alignment = header_alignment
 
-          def ajustar_anchos_columnas(ws):
-              # calcular ancho máximo por columna
+              # Autofiltro
+              if ws.max_row >= 1 and ws.max_column >= 1:
+                  ws.auto_filter.ref = ws.dimensions
+
+              # Congelar cabecera
+              ws.freeze_panes = "A2"
+
+              # Ajustar anchos
               col_widths = {}
               for row in ws.iter_rows(values_only=True):
                   for idx, value in enumerate(row, start=1):
@@ -163,35 +235,17 @@
 
               for idx, width in col_widths.items():
                   col_letter = ws.cell(row=1, column=idx).column_letter
-                  # pequeño margen para que no quede “pegado”
-                  ws.column_dimensions[col_letter].width = width + 2
+                  ws.column_dimensions[col_letter].width = min(width + 2, 80)
 
-          def crear_o_actualizar_tabla(ws):
-              """
-              Crea o actualiza una tabla de Excel en toda el área de datos.
-              Usa la API pública ws.tables para ser compatible con distintas
-              versiones de openpyxl.
-              """
-              if ws.max_row < 2:
-                  return  # no hay datos
+              # Crear tabla para que se vea más chulo
+              if ws.max_row >= 2:
+                  last_col = ws.max_column
+                  last_row = ws.max_row
+                  start_cell = "A1"
+                  end_cell = ws.cell(row=last_row, column=last_col).coordinate
+                  table_range = f"{start_cell}:{end_cell}"
 
-              last_col = ws.max_column
-              last_row = ws.max_row
-              start_cell = "A1"
-              end_cell = ws.cell(row=last_row, column=last_col).coordinate
-              table_range = f"{start_cell}:{end_cell}"
-
-              # ws.tables es un dict: nombre_tabla -> Table
-              tables = getattr(ws, "tables", None)
-
-              if tables and len(tables) > 0:
-                  # Reutilizamos la primera tabla existente
-                  first_name = list(tables.keys())[0]
-                  table = tables[first_name]
-                  table.ref = table_range
-              else:
-                  # No hay tablas, creamos una nueva
-                  table = Table(displayName="TablaServicios", ref=table_range)
+                  table = Table(displayName="TablaServiciosHost", ref=table_range)
                   style = TableStyleInfo(
                       name="TableStyleMedium9",
                       showFirstColumn=False,
@@ -202,101 +256,29 @@
                   table.tableStyleInfo = style
                   ws.add_table(table)
 
-          def ordenar_por_hostname_puerto(ws):
-              """
-              Ordena las filas de datos por:
-                1) Hostname (columna 1)
-                2) Puerto (columna 5) numéricamente cuando se pueda
-              """
-              if ws.max_row < 2:
-                  return  # solo cabecera o nada
-
-              # Extraer todas las filas de datos (sin cabecera)
-              data_rows = list(ws.iter_rows(min_row=2, values_only=True))
-
-              def puerto_key(row):
-                  # row[4] es la columna 5 (Puerto) en base 0
-                  puerto_val = row[4]
-                  if puerto_val is None:
-                      return (1, "")  # que vaya al final
-                  try:
-                      # ordenar primero por flag 0 (numérico), luego por el valor
-                      return (0, int(str(puerto_val)))
-                  except ValueError:
-                      # si no se puede convertir a int, lo tratamos como texto
-                      return (1, str(puerto_val))
-
-              # Ordenamos por Hostname y luego por Puerto
-              # row[0] es Hostname (columna 1)
-              data_rows.sort(key=lambda r: (str(r[0]), puerto_key(r)))
-
-              # Borramos todas las filas de datos actuales (dejamos la cabecera)
-              ws.delete_rows(2, ws.max_row - 1)
-
-              # Insertamos de nuevo los datos ya ordenados
-              for row in data_rows:
-                  ws.append(row)
+              wb.save(ruta_excel)
 
           def run():
               if len(sys.argv) != 3:
-                  print(f"Uso: {sys.argv[0]} <ruta_excel> <ruta_json>")
+                  print(f"Uso: {sys.argv[0]} <ruta_excel> <directorio_json>")
                   sys.exit(1)
 
-              ex_p, j_p = sys.argv[1], sys.argv[2]
+              ruta_excel = sys.argv[1]
+              dir_json   = sys.argv[2]
 
-              with open(j_p, 'r') as f:
-                  data = json.load(f)
-
-              hn = data.get('inventory_hostname', 'Desconocido')
-              so = data.get("ansible_distribution", "") + " " + str(data.get("ansible_distribution_version", ""))
-              ip = ""
-              # Intentar sacar IP principal
-              if "ansible_default_ipv4" in data and "address" in data["ansible_default_ipv4"]:
-                  ip = data["ansible_default_ipv4"]["address"]
-
-              servicios = data.get('servicios_lista', [])
-
-              wb, ws = crear_o_abrir_excel(ex_p)
-
-              # Añadir filas con los servicios
-              for svc in servicios:
-                  proto  = svc.get('protocolo', '')
-                  puerto = svc.get('puerto', '')
-                  proc   = svc.get('proceso', '')
-                  ws.append([hn, so, ip, proto, puerto, proc])
-
-              # Ordenar por Hostname y Puerto
-              ordenar_por_hostname_puerto(ws)
-
-              # Aplicar estilo cabeceras
-              aplicar_estilo_cabeceras(ws)
-
-              # Activar auto-filtros sobre todo el rango (cabecera + datos)
-              if ws.max_row >= 1 and ws.max_column >= 1:
-                  ws.auto_filter.ref = ws.dimensions
-
-              # Congelar la primera fila de cabeceras
-              ws.freeze_panes = "A2"
-
-              # Ajustar ancho de columnas según contenido
-              ajustar_anchos_columnas(ws)
-
-              # Crear/actualizar tabla de Excel para hacer más visual y filtrable
-              crear_o_actualizar_tabla(ws)
-
-              wb.save(ex_p)
+              hosts = cargar_datos_json(dir_json)
+              if not hosts:
+                  print("[WARN] No se encontraron JSON de servicios.")
+              crear_excel_resumen(ruta_excel, hosts)
 
           if __name__ == "__main__":
               run()
-              
-    - name: Ejecutar script para cada JSON de servicios
+
+    - name: Ejecutar script agregando TODOS los JSON
       ansible.builtin.shell: |
         [ -d {{ venv_path }} ] || python3 -m venv {{ venv_path }}
         {{ venv_path }}/bin/pip install openpyxl --quiet
-        for json_file in {{ ruta_json_ctl }}/info_servicios_*.json; do
-          [ -f "$json_file" ] || continue
-          {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} "$json_file"
-        done
+        {{ venv_path }}/bin/python {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}
       args:
         executable: /bin/bash
 
