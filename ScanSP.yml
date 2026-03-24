@@ -4,8 +4,8 @@
 ########################################################################
 - name: Auditoria de Puertos y Servicios
   hosts: semaforos
-  become: yes
-  gather_facts: yes   # para tener ansible_hostname, SO, IP, etc.
+  become: true
+  gather_facts: true   # para tener ansible_hostname, ansible_default_ipv4, etc.
 
   vars:
     ruta_json_remoto: "/tmp/info_servicios_{{ inventory_hostname }}.json"
@@ -68,19 +68,19 @@
 
     - name: Guardar facts + servicios en JSON en el host
       ansible.builtin.copy:
-    content: |
-      {{
-        ansible_facts
-        | combine({
-            'inventory_hostname': inventory_hostname,
-            'ansible_hostname': ansible_hostname,
-            'ansible_default_ipv4': ansible_default_ipv4,
-            'servicios_lista': servicios_lista
-          })
-        | to_nice_json
-      }}
-    dest: "{{ ruta_json_remoto }}"
-    force: yes
+        content: |
+          {{
+            ansible_facts
+            | combine({
+                'inventory_hostname': inventory_hostname,
+                'ansible_hostname': ansible_hostname,
+                'ansible_default_ipv4': ansible_default_ipv4,
+                'servicios_lista': servicios_lista
+              })
+            | to_nice_json
+          }}
+        dest: "{{ ruta_json_remoto }}"
+        force: true
 
     - name: Traer JSON al nodo de control
       ansible.builtin.fetch:
@@ -90,11 +90,11 @@
 
 
 ########################################################################
-# 2) Localhost: generar Excel “1 línea por host (Hostname/IP/SO)”      #
+# 2) Localhost: generar Excel “1 línea por host (Hostname/IP)”        #
 ########################################################################
 - name: Procesar datos y generar Excel de Servicios (Resumen por host)
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
 
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
@@ -115,42 +115,14 @@
           from openpyxl.styles import Font, PatternFill, Alignment
           from openpyxl.worksheet.table import Table, TableStyleInfo
 
-          # Columnas definitivas
           CABECERAS = [
               "Hostname",
               "IP",
-              "SO",
               "Servicios"
           ]
 
-          def extraer_facts(data):
-              """
-              Devuelve un dict con los facts de Ansible.
-              Si los facts vienen anidados en 'ansible_facts', se usan esos;
-              si no, se usan las claves del nivel superior.
-              """
-              if isinstance(data, dict) and "ansible_facts" in data and isinstance(data["ansible_facts"], dict):
-                  return data["ansible_facts"]
-              return data
-
-          def cargar_datos_json(directorio_json):
-              """
-              Lee todos los info_servicios_*.json del directorio y
-              devuelve un diccionario:
-                host -> {
-                    'ip': ...,
-                    'so': ...,
-                    'servicios': set((proto, puerto, proceso))
-                }
-              """
-              patrones = [
-                  os.path.join(directorio_json, "info_servicios_*.json"),
-                  os.path.join(directorio_json, "info_servicios_*.JSON"),
-              ]
-              ficheros = []
-              for p in patrones:
-                  ficheros.extend(glob(p))
-
+          def cargar_datos_json(directorio):
+              ficheros = glob(os.path.join(directorio, "info_servicios_*.json"))
               hosts = {}
 
               for ruta in ficheros:
@@ -161,149 +133,92 @@
                       print(f"[WARN] No se pudo leer {ruta}: {e}")
                       continue
 
-                  facts = extraer_facts(data)
+                  # Hostname correcto: preferimos ansible_hostname
+                  hn = data.get("ansible_hostname") \
+                        or data.get("inventory_hostname") \
+                        or "Desconocido"
 
-                  # Preferimos el hostname real del sistema
-                  hn = (
-                      facts.get("ansible_hostname")
-                      or facts.get("ansible_nodename")
-                      or facts.get("inventory_hostname")
-                      or data.get("inventory_hostname")
-                      or "Desconocido"
-                  )
-
-                  # SO: distribución + versión si están disponibles
-                  distro = facts.get("ansible_distribution", "") or ""
-                  version = str(facts.get("ansible_distribution_version", "") or "")
-                  so = (distro + " " + version).strip()
-
-                  # IP principal si existe
+                  # IP real desde ansible_default_ipv4.address
                   ip = ""
-                  default_ipv4 = facts.get("ansible_default_ipv4") or data.get("ansible_default_ipv4") or {}
-                  if isinstance(default_ipv4, dict):
-                      ip = default_ipv4.get("address", "")
+                  if isinstance(data.get("ansible_default_ipv4"), dict):
+                      ip = data["ansible_default_ipv4"].get("address", "")
 
                   servicios = data.get("servicios_lista", [])
 
                   if hn not in hosts:
                       hosts[hn] = {
                           "ip": ip,
-                          "so": so,
                           "servicios": set()
                       }
 
-                  # Por si el mismo host aparece en varios JSON y en uno viene el SO/IP mejor
+                  # Si después vemos una IP mejor, la actualizamos
                   if not hosts[hn]["ip"] and ip:
                       hosts[hn]["ip"] = ip
-                  if not hosts[hn]["so"] and so:
-                      hosts[hn]["so"] = so
 
                   for svc in servicios:
-                      proto  = svc.get("protocolo", "")
-                      puerto = svc.get("puerto", "")
-                      proc   = svc.get("proceso", "")
-                      hosts[hn]["servicios"].add((proto, str(puerto), proc))
+                      proto = svc.get("protocolo", "")
+                      puerto = str(svc.get("puerto", ""))
+                      proc = svc.get("proceso", "")
+                      hosts[hn]["servicios"].add((proto, puerto, proc))
 
               return hosts
 
-          def crear_excel_resumen(ruta_excel, hosts):
-              """
-              Crea SIEMPRE un Excel nuevo con 1 línea por host.
-              """
+          def crear_excel(ruta_excel, hosts):
               wb = Workbook()
               ws = wb.active
               ws.title = "Servicios_por_Host"
-
-              # Cabeceras
               ws.append(CABECERAS)
 
-              # Filas: una por host
-              for hostname in sorted(hosts.keys()):
-                  info = hosts[hostname]
-                  ip = info.get("ip", "")
-                  so = info.get("so", "")
+              for hostname in sorted(hosts):
+                  ip = hosts[hostname]["ip"]
 
-                  # Ordenamos servicios por puerto y luego proceso
-                  servicios_ordenados = sorted(
-                      list(info["servicios"]),
+                  servicios = sorted(
+                      hosts[hostname]["servicios"],
                       key=lambda x: (x[1], x[2])
                   )
-                  # Formato: "tcp 22 (sshd), tcp 443 (nginx)"
-                  servicios_str = ", ".join(
-                      f"{proto} {puerto} ({proc})"
-                      for proto, puerto, proc in servicios_ordenados
-                  )
 
-                  ws.append([hostname, ip, so, servicios_str])
+                  srv = ", ".join(f"{p} {pu} ({pr})" for p, pu, pr in servicios)
+                  ws.append([hostname, ip, srv])
 
-              # Dar formato a cabeceras
-              header_fill = PatternFill(
-                  start_color="FFD966",
-                  end_color="FFD966",
-                  fill_type="solid"
-              )
-              header_font = Font(bold=True)
-              header_alignment = Alignment(horizontal="center", vertical="center")
-
+              # Formato cabecera
               for cell in ws[1]:
-                  cell.fill = header_fill
-                  cell.font = header_font
-                  cell.alignment = header_alignment
+                  cell.font = Font(bold=True)
+                  cell.fill = PatternFill(start_color="FFD966", end_color="FFD966", fill_type="solid")
+                  cell.alignment = Alignment(horizontal="center", vertical="center")
 
-              # Autofiltro
-              if ws.max_row >= 1 and ws.max_column >= 1:
-                  ws.auto_filter.ref = ws.dimensions
-
-              # Congelar cabecera
+              # Autofiltro y cabecera congelada
+              ws.auto_filter.ref = ws.dimensions
               ws.freeze_panes = "A2"
 
-              # Ajustar anchos de columna
-              col_widths = {}
-              for row in ws.iter_rows(values_only=True):
-                  for idx, value in enumerate(row, start=1):
-                      if value is None:
-                          continue
-                      length = len(str(value))
-                      if idx not in col_widths or length > col_widths[idx]:
-                          col_widths[idx] = length
+              # Ajustar columnas
+              for col in ws.columns:
+                  max_len = max(len(str(c.value)) for c in col if c.value)
+                  ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 80)
 
-              for idx, width in col_widths.items():
-                  col_letter = ws.cell(row=1, column=idx).column_letter
-                  ws.column_dimensions[col_letter].width = min(width + 2, 80)
-
-              # Crear tabla para que se vea más chulo
-              if ws.max_row >= 2:
-                  last_col = ws.max_column
-                  last_row = ws.max_row
-                  start_cell = "A1"
-                  end_cell = ws.cell(row=last_row, column=last_col).coordinate
-                  table_range = f"{start_cell}:{end_cell}"
-
-                  table = Table(displayName="TablaServiciosHost", ref=table_range)
-                  style = TableStyleInfo(
-                      name="TableStyleMedium9",
-                      showFirstColumn=False,
-                      showLastColumn=False,
-                      showRowStripes=True,
-                      showColumnStripes=False
-                  )
-                  table.tableStyleInfo = style
-                  ws.add_table(table)
+              # Tabla con estilo
+              table = Table(displayName="TablaServicios", ref=ws.dimensions)
+              style = TableStyleInfo(
+                  name="TableStyleMedium9",
+                  showFirstColumn=False,
+                  showLastColumn=False,
+                  showRowStripes=True,
+                  showColumnStripes=False,
+              )
+              table.tableStyleInfo = style
+              ws.add_table(table)
 
               wb.save(ruta_excel)
 
           def run():
               if len(sys.argv) != 3:
-                  print(f"Uso: {sys.argv[0]} <ruta_excel> <directorio_json>")
+                  print("Uso: script <ruta_excel> <directorio_json>")
                   sys.exit(1)
 
               ruta_excel = sys.argv[1]
-              dir_json   = sys.argv[2]
+              dir_json = sys.argv[2]
 
               hosts = cargar_datos_json(dir_json)
-              if not hosts:
-                  print("[WARN] No se encontraron JSON de servicios.")
-              crear_excel_resumen(ruta_excel, hosts)
+              crear_excel(ruta_excel, hosts)
 
           if __name__ == "__main__":
               run()
@@ -322,7 +237,7 @@
 ##########################################################
 - name: Exportar Excel de Servicios a recurso de red
   hosts: localhost
-  gather_facts: no
+  gather_facts: false
 
   vars:
     ruta_excel_src: "/home/semaphore/Excels/Servicios_Servidores_DMZ.xlsx"
