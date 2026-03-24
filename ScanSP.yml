@@ -180,20 +180,21 @@
               end_cell = ws.cell(row=last_row, column=last_col).coordinate
               table_range = f"{start_cell}:{end_cell}"
 
-              # Si ya existe una tabla, la eliminamos y la recreamos sobre el nuevo rango
+              # Si ya existe una tabla, actualizamos su rango
               if ws._tables:
-                  ws._tables = []  # asumimos solo una tabla
-
-              table = Table(displayName="TablaServicios", ref=table_range)
-              style = TableStyleInfo(
-                  name="TableStyleMedium9",
-                  showFirstColumn=False,
-                  showLastColumn=False,
-                  showRowStripes=True,
-                  showColumnStripes=False
-              )
-              table.tableStyleInfo = style
-              ws.add_table(table)
+                  table = ws._tables[0]  # asumimos solo una tabla
+                  table.ref = table_range
+              else:
+                  table = Table(displayName="TablaServicios", ref=table_range)
+                  style = TableStyleInfo(
+                      name="TableStyleMedium9",
+                      showFirstColumn=False,
+                      showLastColumn=False,
+                      showRowStripes=True,
+                      showColumnStripes=False
+                  )
+                  table.tableStyleInfo = style
+                  ws.add_table(table)
 
           def ordenar_por_hostname_puerto(ws):
               """
