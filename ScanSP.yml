@@ -68,17 +68,19 @@
 
     - name: Guardar facts + servicios en JSON en el host
       ansible.builtin.copy:
-        content: |
-          {{
-            ansible_facts
-            | combine({
-                'inventory_hostname': inventory_hostname,
-                'servicios_lista': servicios_lista
-              })
-            | to_nice_json
-          }}
-        dest: "{{ ruta_json_remoto }}"
-        force: yes
+    content: |
+      {{
+        ansible_facts
+        | combine({
+            'inventory_hostname': inventory_hostname,
+            'ansible_hostname': ansible_hostname,
+            'ansible_default_ipv4': ansible_default_ipv4,
+            'servicios_lista': servicios_lista
+          })
+        | to_nice_json
+      }}
+    dest: "{{ ruta_json_remoto }}"
+    force: yes
 
     - name: Traer JSON al nodo de control
       ansible.builtin.fetch:
