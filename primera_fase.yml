@@ -2,6 +2,8 @@
 - name: Habilitar puerto SSH alternativo 45500
   hosts: all
   become: yes
+  gather_facts: yes  # Necesitamos saber qué sistema es para el firewall
+
   tasks:
     - name: "Asegurar que SSH escucha en el puerto 22 y 45500"
       lineinfile:
@@ -9,24 +11,30 @@
         regexp: "^#?Port 22"
         line: "Port 22\nPort 45500"
         state: present
-      notify: Reiniciar SSH
 
-    - name: "Abrir puerto 45500 en el firewall (UFW - Ubuntu/Debian)"
-      ufw:
-        rule: allow
-        port: '45500'
-        proto: tcp
-      when: ansible_os_family == "Debian"
-
-    - name: "Abrir puerto 45500 en el firewall (Firewalld - RHEL/CentOS)"
+    - name: "Intentar abrir puerto en Firewalld (RedHat/CentOS)"
       firewalld:
         port: 45500/tcp
         permanent: yes
         state: enabled
+        immediate: yes
       when: ansible_os_family == "RedHat"
+      ignore_errors: yes
 
-  handlers:
-    - name: Reiniciar SSH
+    - name: "Intentar abrir puerto en UFW (Ubuntu/Debian)"
+      command: ufw allow 45500/tcp
+      when: ansible_os_family == "Debian"
+      ignore_errors: yes
+
+    - name: "REINICIAR SSH AHORA"
       service:
         name: ssh
         state: restarted
+      # En algunos sistemas el servicio se llama 'sshd'
+      ignore_errors: yes
+
+    - name: "REINICIAR SSHD (por si el anterior falló)"
+      service:
+        name: sshd
+        state: restarted
+      ignore_errors: yes
