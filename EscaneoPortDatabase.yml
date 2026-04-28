@@ -173,13 +173,14 @@
 ########################################################################
 # 3. EXPORTACIÓN                                                       #
 ########################################################################
-- name: Publicar Inventario
+- name: Copiar al Share
   hosts: localhost
   tasks:
-    - name: Copiar al Share
+    - name: Copiar al recurso compartido
       become: true
       ansible.builtin.copy:
-        src: "/home/semaphore/ExcelsInventario_ProgramasSRV.xlsx"
-        dest: "/mnt/ansible_share/Inventario_ProgramasSRV.xlsx"
+        # Fíjate en la barra '/' después de Excels
+        src: "/home/semaphore/Excels/Inventario_Sistemas_Completo.xlsx"
+        dest: "/mnt/ansible_share/Inventario_Sistemas_Completo.xlsx"
         mode: "0644"
         remote_src: true
