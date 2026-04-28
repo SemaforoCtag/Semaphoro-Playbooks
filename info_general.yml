@@ -1,6 +1,6 @@
 ---
 ########################################################################
-# 1. Linux (semaforos): facts + PUERTOS → JSON → fetch al nodo control #
+# 1. Linux (semaforos): Recogida de datos completa + RAM y CPU         #
 ########################################################################
 - name: Recoger facts y escanear puertos
   hosts: semaforos
@@ -12,14 +12,12 @@
     ruta_json_ctl:    "/home/semaphore/Excels"
 
   pre_tasks:
-    - name: Limpiar archivos JSON y Excel antiguos (sin borrar la carpeta)
+    - name: Limpiar archivos antiguos
       delegate_to: localhost
       run_once: true
       become: false
       ansible.builtin.shell: "rm -f {{ ruta_json_ctl }}/info_*.json {{ ruta_json_ctl }}/*.xlsx"
-      args:
-        removes: "{{ ruta_json_ctl }}" # Solo se ejecuta si la carpeta existe
-      ignore_errors: yes # Evita que el playbook se detenga si no hay archivos que borrar
+      ignore_errors: yes
 
     - name: Asegurar que la carpeta local existe
       ansible.builtin.file:
@@ -28,64 +26,30 @@
         mode: "0755"
       delegate_to: localhost
       run_once: true
-      become: false
 
   tasks:
-    # 1A) Escaneo de PUERTOS de bases de datos
-    - name: Verificar MySQL (3306)
+    # 1A) Verificación de Puertos DB
+    - name: Escaneo de Puertos Base de Datos
       ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
-        port: 3306
-        timeout: 2
-      register: mysql_port
+        port: "{{ item }}"
+        timeout: 1
+      register: db_ports
       ignore_errors: yes
+      loop: [3306, 5432, 1433, 1521, 27017]
 
-    - name: Verificar PostgreSQL (5432)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 5432
-        timeout: 2
-      register: postgres_port
-      ignore_errors: yes
-
-    - name: Verificar SQL Server (1433)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 1433
-        timeout: 2
-      register: sqlserver_port
-      ignore_errors: yes
-
-    - name: Verificar Oracle (1521)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 1521
-        timeout: 2
-      register: oracle_port
-      ignore_errors: yes
-
-    - name: Verificar MongoDB (27017)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 27017
-        timeout: 2
-      register: mongodb_port
-      ignore_errors: yes
-
-    - name: Consolidar resultado de puertos DB
-      ansible.builtin.set_fact:
-        puertos_db:
-          mysql: "{{ 'SI' if mysql_port is defined and not mysql_port.failed else '-' }}"
-          postgresql: "{{ 'SI' if postgres_port is defined and not postgres_port.failed else '-' }}"
-          sqlserver: "{{ 'SI' if sqlserver_port is defined and not sqlserver_port.failed else '-' }}"
-          oracle: "{{ 'SI' if oracle_port is defined and not oracle_port.failed else '-' }}"
-          mongodb: "{{ 'SI' if mongodb_port is defined and not mongodb_port.failed else '-' }}"
-
-    - name: Obtener puertos TCP/UDP en escucha (ss)
+    # 1B) Puertos y Usuarios
+    - name: Obtener puertos TCP/UDP (ss)
       ansible.builtin.shell: "ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq | xargs"
       register: listening_ports_cmd
 
-    - name: Guardar facts + puertos en JSON
+    - name: Obtener lista de Usuarios
+      ansible.builtin.shell: |
+        getent passwd | cut -d: -f1 | while read u; do echo "$u:$(id -Gn $u | tr ' ' ',')"; done
+      register: lista_usuarios_detallada
+
+    # 1C) Generar JSON con RAM y CPU
+    - name: Guardar info en JSON
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
         content: |
@@ -94,8 +58,18 @@
             "hostname": "{{ ansible_hostname }}",
             "os": "{{ ansible_os_family }} {{ ansible_distribution_version }}",
             "fecha": "{{ ansible_date_time.date }} {{ ansible_date_time.time }}",
-            "puertos_db": {{ puertos_db | to_json }},
-            "listening_ports": "{{ listening_ports_cmd.stdout }}"
+            "cpu_modelo": "{{ ansible_processor[1] if ansible_processor|length > 1 else ansible_processor[0] }} ({{ ansible_processor_vcpus }} vCPUs)",
+            "ram_total_mb": {{ ansible_memtotal_mb }},
+            "ram_uso_mb": {{ ansible_memtotal_mb - ansible_memfree_mb }},
+            "puertos_db": {
+               "mysql": {{ 'true' if db_ports.results[0].failed is not defined or not db_ports.results[0].failed else 'false' }},
+               "postgres": {{ 'true' if db_ports.results[1].failed is not defined or not db_ports.results[1].failed else 'false' }},
+               "sqlserver": {{ 'true' if db_ports.results[2].failed is not defined or not db_ports.results[2].failed else 'false' }},
+               "oracle": {{ 'true' if db_ports.results[3].failed is not defined or not db_ports.results[3].failed else 'false' }},
+               "mongo": {{ 'true' if db_ports.results[4].failed is not defined or not db_ports.results[4].failed else 'false' }}
+            },
+            "listening_ports": "{{ listening_ports_cmd.stdout }}",
+            "usuarios_detallados": {{ lista_usuarios_detallada.stdout_lines | to_json }}
           }
 
     - name: Traer JSON al nodo de control
@@ -105,9 +79,9 @@
         flat: true
 
 ########################################################################
-# 2. Localhost: Generar Excel ÚNICO y VISUAL                           #
+# 2. Localhost: Generar Excel con RAM y CPU                           #
 ########################################################################
-- name: Generar Excel Profesional
+- name: Generar Reporte Consolidado
   hosts: localhost
   gather_facts: no
   vars:
@@ -116,7 +90,7 @@
     script_python: "/home/semaphore/Excels/generar_excel.py"
 
   tasks:
-    - name: Crear Script Python de Consolidación Visual
+    - name: Crear Script Python con Columnas RAM/CPU
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -127,60 +101,59 @@
           from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
           def run():
-              excel_path = sys.argv[1]
-              json_files = glob.glob(os.path.join(sys.argv[2], "info_*.json"))
-              if not json_files:
-                  print("No se encontraron archivos JSON.")
-                  return
+              excel_path, json_dir = sys.argv[1], sys.argv[2]
+              json_files = glob.glob(os.path.join(json_dir, "info_*.json"))
+              wb = Workbook(); ws = wb.active; ws.title = "Inventario DMZ"
 
-              wb = Workbook()
-              ws = wb.active
-              ws.title = "Inventario DMZ"
-
-              color_header = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
-              color_zebra = PatternFill(start_color="F2F4F4", end_color="F2F4F4", fill_type="solid")
-              font_white = Font(color="FFFFFF", bold=True)
+              color_h = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+              color_z = PatternFill(start_color="F2F4F4", end_color="F2F4F4", fill_type="solid")
               border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
-              headers = ["IP SERVIDOR", "HOSTNAME", "SISTEMA OP.", "FECHA ESCANEO", "MYSQL", "POSTGRES", "SQLSERV", "ORACLE", "MONGO", "TODOS LOS PUERTOS"]
+              headers = ["IP", "HOSTNAME", "OS", "CPU / PROCESADOR", "RAM TOTAL", "RAM EN USO", "FECHA", "MYSQL", "PGSQL", "SQLSRV", "ORACLE", "MONGO", "USUARIOS"]
               ws.append(headers)
               for cell in ws[1]:
-                  cell.fill, cell.font, cell.alignment = color_header, font_white, Alignment(horizontal="center")
+                  cell.fill, cell.font, cell.alignment = color_h, Font(color="FFFFFF", bold=True), Alignment(horizontal="center")
 
               for f_path in sorted(json_files):
                   with open(f_path, 'r') as f:
                       d = json.load(f)
                   pdb = d.get('puertos_db', {})
+                  ram_t = f"{round(d.get('ram_total_mb', 0)/1024, 2)} GB"
+                  ram_u = f"{round(d.get('ram_uso_mb', 0)/1024, 2)} GB"
+                  
                   row = [
-                      d.get('ip'), d.get('hostname'), d.get('os'), d.get('fecha'),
-                      pdb.get('mysql'), pdb.get('postgresql'), pdb.get('sqlserver'),
-                      pdb.get('oracle'), pdb.get('mongodb'), d.get('listening_ports')
+                      d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu_modelo'),
+                      ram_t, ram_u, d.get('fecha'),
+                      "SI" if pdb.get('mysql') else "-", "SI" if pdb.get('postgres') else "-",
+                      "SI" if pdb.get('sqlserver') else "-", "SI" if pdb.get('oracle') else "-",
+                      "SI" if pdb.get('mongo') else "-", "\n".join(d.get('usuarios_detallados', []))
                   ]
                   ws.append(row)
                   curr = ws.max_row
-                  for cell in ws[curr]:
+                  for i, cell in enumerate(ws[curr], 1):
                       cell.border = border
-                      cell.alignment = Alignment(horizontal="center")
-                      if curr % 2 == 0: cell.fill = color_zebra
+                      cell.alignment = Alignment(horizontal="center", vertical="top")
+                      if i == 13: cell.alignment = Alignment(wrap_text=True, vertical="top")
+                      if curr % 2 == 0: cell.fill = color_z
               
-              for col in ws.columns:
-                  ws.column_dimensions[col[0].column_letter].width = 20
-              ws.column_dimensions['J'].width = 50
+              for col in ['A','B','C','D','E','F','G','H','I','J','K','L']: ws.column_dimensions[col].width = 18
+              ws.column_dimensions['D'].width = 35 # CPU
+              ws.column_dimensions['M'].width = 50 # Usuarios
               wb.save(excel_path)
 
           if __name__ == "__main__":
               run()
 
-    - name: Ejecutar script Python una sola vez
+    - name: Ejecutar script Python
       ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
 
 ########################################################################
-# 3. Exportación al Recurso de Red                                     #
+# 3. Exportación Final                                                 #
 ########################################################################
-- name: Copiar archivos al Share
+- name: Copiar al Share
   hosts: localhost
   tasks:
-    - name: Verificar montaje y copiar
+    - name: Mover al recurso de red
       become: true
       ansible.builtin.copy:
         src: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
