@@ -52,12 +52,14 @@
       register: datos_windows
       changed_when: false
 
-    - name: Generar JSON con Timestamp
+    - name: Generar JSON con Timestamp y OS
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
         content: |
           {
             "inventory_hostname": "{{ inventory_hostname }}",
+            "ansible_hostname": "{{ ansible_hostname | default('N/A') }}",
+            "os_family": "{{ ansible_os_family }}",
             "fecha_escaneo": "{{ ansible_date_time.date }} {{ ansible_date_time.time }}",
             "datos": {{ (es_windows | ternary(datos_windows.stdout_lines, datos_linux.stdout_lines)) | to_json }}
           }
@@ -96,14 +98,15 @@
               with open(j_p, 'r') as f:
                   data = json.load(f)
               
-              hn = data.get('inventory_hostname', 'Desconocido')
+              ip = data.get('inventory_hostname', 'Desconocido')
+              hn = data.get('ansible_hostname', 'N/A')
+              os_f = data.get('os_family', 'N/A')
               fecha = data.get('fecha_escaneo', 'N/A')
               filas = data.get('datos', [])
 
-              # --- CONFIGURACIÓN DE ESTILOS ---
-              color_server = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid") # Azul Grisáceo Oscuro
-              color_header = PatternFill(start_color="D5D8DC", end_color="D5D8DC", fill_type="solid") # Gris Claro
-              color_zebra  = PatternFill(start_color="F8F9F9", end_color="F8F9F9", fill_type="solid") # Blanco Humo
+              # Colores
+              color_server = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+              color_header = PatternFill(start_color="D5D8DC", end_color="D5D8DC", fill_type="solid")
               border_style = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
               if os.path.exists(ex_p):
@@ -114,48 +117,45 @@
                   ws = wb.active
                   ws.title = "Auditoría"
 
-              # 1. Fila de separación para que no esté todo pegado
-              ws.append([])
+              ws.append([]) # Espacio en blanco
 
-              # 2. Encabezado del Servidor (Barra de título)
-              ws.append(["SERVIDOR:", hn, "FECHA DE ESCANEO:", fecha])
+              # --- NUEVA BARRA DE TÍTULO MÁS COMPLETA ---
+              # Fila 1: IP y Hostname
+              ws.append(["IP:", ip, "HOSTNAME:", hn])
               for cell in ws[ws.max_row]:
-                  cell.font = Font(bold=True, color="FFFFFF", size=11)
+                  cell.font = Font(bold=True, color="FFFFFF")
                   cell.fill = color_server
-                  cell.alignment = Alignment(horizontal="left")
 
-              # 3. Encabezado de los datos
-              ws.append(["", "ESTADO", "USUARIO", "GRUPOS / PERMISOS EN EL SISTEMA"])
+              # Fila 2: OS y Fecha
+              ws.append(["SISTEMA:", os_f, "FECHA:", fecha])
+              for cell in ws[ws.max_row]:
+                  cell.font = Font(bold=True, color="FFFFFF")
+                  cell.fill = color_server
+
+              # Encabezado de tabla
+              ws.append(["", "ESTADO", "USUARIO", "GRUPOS / PERMISOS"])
               for cell in ws[ws.max_row]:
                   if cell.column > 1:
                       cell.font = Font(bold=True)
                       cell.fill = color_header
                       cell.border = border_style
 
-              # 4. Listado de usuarios
+              # Datos de usuarios
               for linea in filas:
                   if ':' in linea:
                       user, groups = linea.split(':', 1)
-                      # Heurística para resaltar admins
                       es_admin = any(g in groups.lower() for g in ['sudo', 'wheel', 'administrators', 'root'])
                       status = "ADMIN" if es_admin else "Normal"
-                      
                       ws.append(["", status, user, groups if groups else "---"])
                       
                       curr_row = ws.max_row
                       for i in range(2, 5):
                           cell = ws.cell(row=curr_row, column=i)
                           cell.border = border_style
-                          if curr_row % 2 == 0: cell.fill = color_zebra
                           if es_admin:
-                              cell.font = Font(bold=True, color="C0392B") # Rojo oscuro para admins
+                              cell.font = Font(bold=True, color="C0392B")
 
-              # 5. Ajuste de columnas para que se vea bien de entrada
-              ws.column_dimensions['A'].width = 3
-              ws.column_dimensions['B'].width = 12
-              ws.column_dimensions['C'].width = 25
               ws.column_dimensions['D'].width = 70
-
               wb.save(ex_p)
 
           if __name__ == "__main__":
