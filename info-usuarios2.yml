@@ -19,12 +19,19 @@
       run_once: true
       become: false
 
+    - name: Eliminar Excel anterior para generar uno nuevo limpio
+      ansible.builtin.file:
+        path: "/home/semaphore/Excels/Inventario_Usuarios_Completo.xlsx"
+        state: absent
+      delegate_to: localhost
+      run_once: true
+
   tasks:
     - name: Detectar SO
       ansible.builtin.set_fact:
         es_windows: "{{ ansible_os_family == 'Windows' }}"
 
-    - name: Linux - Obtener todos los usuarios y sus grupos
+    - name: Linux - Obtener usuarios y grupos
       when: not es_windows
       ansible.builtin.shell: |
         for u in $(cut -d: -f1 /etc/passwd); do
@@ -34,7 +41,7 @@
       register: datos_linux
       changed_when: false
 
-    - name: Windows - Obtener todos los usuarios y sus grupos
+    - name: Windows - Obtener usuarios y grupos
       when: es_windows
       ansible.windows.win_shell: |
         Get-LocalUser | ForEach-Object {
@@ -45,12 +52,13 @@
       register: datos_windows
       changed_when: false
 
-    - name: Generar JSON
+    - name: Generar JSON con Timestamp
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
         content: |
           {
             "inventory_hostname": "{{ inventory_hostname }}",
+            "fecha_escaneo": "{{ ansible_date_time.date }} {{ ansible_date_time.time }}",
             "datos": {{ (es_windows | ternary(datos_windows.stdout_lines, datos_linux.stdout_lines)) | to_json }}
           }
 
@@ -61,7 +69,7 @@
         flat: true
 
 ##########################################################
-# 2) Localhost: Crear Excel con columna "Permisos"       #
+# 2) Localhost: Crear Excel VISUAL                      #
 ##########################################################
 - name: Procesar datos y generar Excel
   hosts: localhost
@@ -70,17 +78,19 @@
     ruta_json_ctl: "/home/semaphore/Excels"
     ruta_excel:    "/home/semaphore/Excels/Inventario_Usuarios_Completo.xlsx"
     script_python: "/home/semaphore/Excels/append_excel2.py"
-    venv_path:     "/home/semaphore/Excels/.venv"
+    venv_path:      "/home/semaphore/Excels/.venv"
 
   tasks:
-    - name: Actualizar Script Python (Columna Permisos)
+    - name: Actualizar Script Python (Versión Visual con Estilos)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
           import sys, os, json
+          from datetime import datetime
           from openpyxl import Workbook, load_workbook
+          from openpyxl.styles import Font, Fill, PatternFill, Alignment, Border, Side
 
           def run():
               ex_p, j_p = sys.argv[1], sys.argv[2]
@@ -88,6 +98,7 @@
                   data = json.load(f)
               
               hn = data.get('inventory_hostname', 'Desconocido')
+              fecha = data.get('fecha_escaneo', 'N/A')
               filas = data.get('datos', [])
 
               if os.path.exists(ex_p):
@@ -96,13 +107,32 @@
               else:
                   wb = Workbook()
                   ws = wb.active
-                  # AQUÍ HEMOS CAMBIADO EL NOMBRE DE LA COLUMNA
-                  ws.append(["Hostname", "Usuario", "Permisos"])
+                  ws.title = "Inventario de Usuarios"
+                  # Cabeceras
+                  headers = ["Fecha Escaneo", "Hostname", "Usuario", "Grupos/Permisos"]
+                  ws.append(headers)
+                  
+                  # Estilo de Cabecera (Azul oscuro, Blanco, Negrita)
+                  header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                  header_font = Font(color="FFFFFF", bold=True, size=12)
+                  for cell in ws[1]:
+                      cell.fill = header_fill
+                      cell.font = header_font
+                      cell.alignment = Alignment(horizontal="center")
 
+              # Añadir datos
               for linea in filas:
                   if ':' in linea:
                       user, groups = linea.split(':', 1)
-                      ws.append([hn, user, groups if groups else "sin grupos"])
+                      ws.append([fecha, hn, user, groups if groups else "sin grupos"])
+              
+              # Auto-ajustar ancho de columnas
+              for column_cells in ws.columns:
+                  length = max(len(str(cell.value)) for cell in column_cells)
+                  ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+
+              # Añadir Filtros
+              ws.auto_filter.ref = ws.dimensions
               
               wb.save(ex_p)
 
