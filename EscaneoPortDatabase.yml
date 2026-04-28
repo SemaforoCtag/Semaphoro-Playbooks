@@ -1,47 +1,168 @@
 ---
-# ==================================================================
-# 1. Play sobre TODOS los hosts: Escanea puertos de bases de datos
-# ==================================================================
-
-- name: Escaneo de red en busca de puertos de DB
+########################################################################
+# 1. Recogida de datos MULTI-OS (Debian, Ubuntu, Rocky, CentOS, RHEL)  #
+########################################################################
+- name: Auditoría Universal de Servidores Linux
   hosts: semaforos
-  gather_facts: no
+  gather_facts: yes
+  become: true
+
   vars:
-    # Definimos la lista de servicios para centralizar el mantenimiento
-    servicios_db:
-      - { nombre: 'MySQL', puerto: 3306 }
-      - { nombre: 'PostgreSQL', puerto: 5432 }
-      - { nombre: 'SQL Server', puerto: 1433 }
-      - { nombre: 'Oracle', puerto: 1521 }
-      - { nombre: 'MongoDB', puerto: 27017 }
+    ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
+    ruta_json_ctl:    "/home/semaphore/Excels"
+
+  pre_tasks:
+    - name: Limpiar temporales locales
+      delegate_to: localhost
+      run_once: true
+      become: false
+      ansible.builtin.shell: "rm -f {{ ruta_json_ctl }}/info_*.json {{ ruta_json_ctl }}/*.xlsx"
+      ignore_errors: yes
 
   tasks:
-    - name: "Verificando disponibilidad de puertos"
+    # --- SECCIÓN HARDWARE ---
+    - name: Obtener modelo detallado de CPU
+      ansible.builtin.shell: "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//'"
+      register: cpu_model_detailed
+
+    # --- SECCIÓN SOFTWARE (Condicional por Familia de SO) ---
+    - name: Listar software en familias RedHat (Rocky, CentOS, RHEL)
+      ansible.builtin.shell: "rpm -qa --queryformat '%{NAME} (%{VERSION})\n' | sort"
+      register: software_redhat
+      when: ansible_os_family == "RedHat"
+
+    - name: Listar software en familias Debian (Ubuntu, Debian)
+      ansible.builtin.shell: "dpkg-query -W -f='${Package} (${Version})\n' | sort"
+      register: software_debian
+      when: ansible_os_family == "Debian"
+
+    - name: Consolidar lista de software
+      ansible.builtin.set_fact:
+        software_final: "{{ software_redhat.stdout_lines if ansible_os_family == 'RedHat' else software_debian.stdout_lines }}"
+
+    # --- SECCIÓN SERVICIOS Y RED ---
+    - name: Escaneo de Puertos Críticos
       ansible.builtin.wait_for:
-        host: "{{ ansible_host }}"
-        port: "{{ item.puerto }}"
-        timeout: 2
-        msg: "Timeout"
-      loop: "{{ servicios_db }}"
-      register: scan_results
+        host: "{{ inventory_hostname }}"
+        port: "{{ item }}"
+        timeout: 1
+      register: db_ports
       ignore_errors: yes
-      # no_log evita que se muestre el "FAILED" gigante en rojo por cada puerto cerrado
-      no_log: true
+      loop: [3306, 5432, 1433, 1521, 27017]
 
-    - name: "RESUMEN DE ESTADO DE BASES DE DATOS"
-      ansible.builtin.debug:
-        msg: >
-          {{ item.item.nombre }} ({{ item.item.puerto }}): 
-          {{ 'ABIERTO' if item.failed is not defined or not item.failed else 'CERRADO' }}
-      loop: "{{ scan_results.results }}"
-      loop_control:
-        # Esto hace que en el log solo veas el nombre de la DB, no todo el objeto JSON
-        label: "{{ item.item.nombre }}"
+    - name: Obtener todos los puertos en escucha
+      ansible.builtin.shell: "ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq | xargs"
+      register: listening_ports_cmd
 
-    - name: "Consolidar puertos abiertos en una variable (Opcional)"
-      set_fact:
-        puertos_encontrados: "{{ scan_results.results | map(attribute='item.nombre') | list }}"
-      when: not item.failed
-      loop: "{{ scan_results.results }}"
-      loop_control:
-        label: "{{ item.item.nombre }}"
+    # --- GENERACIÓN DE JSON ---
+    - name: Crear JSON con información técnica completa
+      ansible.builtin.copy:
+        dest: "{{ ruta_json_remoto }}"
+        content: |
+          {
+            "ip": "{{ inventory_hostname }}",
+            "hostname": "{{ ansible_hostname }}",
+            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
+            "cpu": "{{ cpu_model_detailed.stdout }} ({{ ansible_processor_vcpus }} vCPUs)",
+            "ram_total": "{{ (ansible_memtotal_mb / 1024) | round(2) }} GB",
+            "ram_uso": "{{ ((ansible_memtotal_mb - ansible_memfree_mb) / 1024) | round(2) }} GB",
+            "puertos_abiertos": "{{ listening_ports_cmd.stdout }}",
+            "software": {{ software_final | to_json }},
+            "puertos_db": {
+               "mysql": {{ 'true' if db_ports.results[0].failed is not defined or not db_ports.results[0].failed else 'false' }},
+               "postgres": {{ 'true' if db_ports.results[1].failed is not defined or not db_ports.results[1].failed else 'false' }},
+               "sqlserver": {{ 'true' if db_ports.results[2].failed is not defined or not db_ports.results[2].failed else 'false' }},
+               "oracle": {{ 'true' if db_ports.results[3].failed is not defined or not db_ports.results[3].failed else 'false' }},
+               "mongo": {{ 'true' if db_ports.results[4].failed is not defined or not db_ports.results[4].failed else 'false' }}
+            }
+          }
+
+    - name: Enviar JSON al controlador
+      ansible.builtin.fetch:
+        src: "{{ ruta_json_remoto }}"
+        dest: "{{ ruta_json_ctl }}/"
+        flat: true
+
+########################################################################
+# 2. LOCALHOST: Generar Excel Profesional Multi-Sistemas               #
+########################################################################
+- name: Consolidar Inventario en Excel
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Sistemas_Universal.xlsx"
+    script_python: "/home/semaphore/Excels/generar_excel_final.py"
+
+  tasks:
+    - name: Crear Script Python de Alto Rendimiento
+      ansible.builtin.copy:
+        dest: "{{ script_python }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import sys, os, json, glob
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+          def run():
+              ex_path, j_dir = sys.argv[1], sys.argv[2]
+              j_files = glob.glob(os.path.join(j_dir, "info_*.json"))
+              wb = Workbook(); ws = wb.active; ws.title = "Inventario Global"
+
+              # Estilos de tabla profesional
+              header_style = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+              zebra_style = PatternFill(start_color="F4F6F6", end_color="F4F6F6", fill_type="solid")
+              white_font = Font(color="FFFFFF", bold=True)
+              border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+              cols = ["IP", "HOSTNAME", "SISTEMA", "CPU", "RAM TOTAL", "RAM USO", "MYSQL", "PGS", "SQL", "ORA", "MG", "PUERTOS", "SOFTWARE INSTALADO"]
+              ws.append(cols)
+              for cell in ws[1]:
+                  cell.fill, cell.font, cell.alignment = header_style, white_font, Alignment(horizontal="center")
+
+              for f in sorted(j_files):
+                  with open(f, 'r') as file:
+                      d = json.load(file)
+                  pdb = d.get('puertos_db', {})
+                  row = [
+                      d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu'),
+                      d.get('ram_total'), d.get('ram_uso'),
+                      "SI" if pdb.get('mysql') else "-", "SI" if pdb.get('postgres') else "-",
+                      "SI" if pdb.get('sqlserver') else "-", "SI" if pdb.get('oracle') else "-",
+                      "SI" if pdb.get('mongo') else "-",
+                      d.get('puertos_abiertos'),
+                      " | ".join(d.get('software', []))
+                  ]
+                  ws.append(row)
+                  curr = ws.max_row
+                  for cell in ws[curr]:
+                      cell.border = border
+                      cell.alignment = Alignment(vertical="center", horizontal="left")
+                      if curr % 2 == 0: cell.fill = zebra_style
+
+              # Ajuste de columnas (La de software es muy grande)
+              for col in ws.columns:
+                  ws.column_dimensions[col[0].column_letter].width = 18
+              ws.column_dimensions['M'].width = 120 
+              wb.save(ex_path)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar motor de generación Excel
+      ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
+
+########################################################################
+# 3. EXPORTACIÓN: Copia al Share Final                                #
+########################################################################
+- name: Publicar Inventario
+  hosts: localhost
+  tasks:
+    - name: Copiar al recurso compartido
+      become: true
+      ansible.builtin.copy:
+        src: "/home/semaphore/Excels/Inventario_Sistemas_Universal.xlsx"
+        dest: "/mnt/ansible_share/Inventario_Sistemas_Universal.xlsx"
+        mode: "0644"
+        remote_src: true
