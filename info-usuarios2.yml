@@ -81,16 +81,15 @@
     venv_path:      "/home/semaphore/Excels/.venv"
 
   tasks:
-    - name: Actualizar Script Python (Versión Visual con Estilos)
+    - name: Actualizar Script Python (NUEVO DISEÑO VISUAL)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
           import sys, os, json
-          from datetime import datetime
           from openpyxl import Workbook, load_workbook
-          from openpyxl.styles import Font, Fill, PatternFill, Alignment, Border, Side
+          from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
           def run():
               ex_p, j_p = sys.argv[1], sys.argv[2]
@@ -101,39 +100,62 @@
               fecha = data.get('fecha_escaneo', 'N/A')
               filas = data.get('datos', [])
 
+              # --- CONFIGURACIÓN DE ESTILOS ---
+              color_server = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid") # Azul Grisáceo Oscuro
+              color_header = PatternFill(start_color="D5D8DC", end_color="D5D8DC", fill_type="solid") # Gris Claro
+              color_zebra  = PatternFill(start_color="F8F9F9", end_color="F8F9F9", fill_type="solid") # Blanco Humo
+              border_style = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
               if os.path.exists(ex_p):
                   wb = load_workbook(ex_p)
                   ws = wb.active
               else:
                   wb = Workbook()
                   ws = wb.active
-                  ws.title = "Inventario de Usuarios"
-                  # Cabeceras
-                  headers = ["Fecha Escaneo", "Hostname", "Usuario", "Grupos/Permisos"]
-                  ws.append(headers)
-                  
-                  # Estilo de Cabecera (Azul oscuro, Blanco, Negrita)
-                  header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-                  header_font = Font(color="FFFFFF", bold=True, size=12)
-                  for cell in ws[1]:
-                      cell.fill = header_fill
-                      cell.font = header_font
-                      cell.alignment = Alignment(horizontal="center")
+                  ws.title = "Auditoría"
 
-              # Añadir datos
+              # 1. Fila de separación para que no esté todo pegado
+              ws.append([])
+
+              # 2. Encabezado del Servidor (Barra de título)
+              ws.append(["SERVIDOR:", hn, "FECHA DE ESCANEO:", fecha])
+              for cell in ws[ws.max_row]:
+                  cell.font = Font(bold=True, color="FFFFFF", size=11)
+                  cell.fill = color_server
+                  cell.alignment = Alignment(horizontal="left")
+
+              # 3. Encabezado de los datos
+              ws.append(["", "ESTADO", "USUARIO", "GRUPOS / PERMISOS EN EL SISTEMA"])
+              for cell in ws[ws.max_row]:
+                  if cell.column > 1:
+                      cell.font = Font(bold=True)
+                      cell.fill = color_header
+                      cell.border = border_style
+
+              # 4. Listado de usuarios
               for linea in filas:
                   if ':' in linea:
                       user, groups = linea.split(':', 1)
-                      ws.append([fecha, hn, user, groups if groups else "sin grupos"])
-              
-              # Auto-ajustar ancho de columnas
-              for column_cells in ws.columns:
-                  length = max(len(str(cell.value)) for cell in column_cells)
-                  ws.column_dimensions[column_cells[0].column_letter].width = length + 2
+                      # Heurística para resaltar admins
+                      es_admin = any(g in groups.lower() for g in ['sudo', 'wheel', 'administrators', 'root'])
+                      status = "ADMIN" if es_admin else "Normal"
+                      
+                      ws.append(["", status, user, groups if groups else "---"])
+                      
+                      curr_row = ws.max_row
+                      for i in range(2, 5):
+                          cell = ws.cell(row=curr_row, column=i)
+                          cell.border = border_style
+                          if curr_row % 2 == 0: cell.fill = color_zebra
+                          if es_admin:
+                              cell.font = Font(bold=True, color="C0392B") # Rojo oscuro para admins
 
-              # Añadir Filtros
-              ws.auto_filter.ref = ws.dimensions
-              
+              # 5. Ajuste de columnas para que se vea bien de entrada
+              ws.column_dimensions['A'].width = 3
+              ws.column_dimensions['B'].width = 12
+              ws.column_dimensions['C'].width = 25
+              ws.column_dimensions['D'].width = 70
+
               wb.save(ex_p)
 
           if __name__ == "__main__":
