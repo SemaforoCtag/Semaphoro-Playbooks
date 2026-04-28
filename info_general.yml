@@ -12,8 +12,19 @@
     ruta_json_ctl:    "/home/semaphore/Excels"
 
   pre_tasks:
+    - name: Limpiar datos antiguos para evitar duplicados
+      delegate_to: localhost
+      run_once: true
+      become: false
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ ruta_json_ctl }}"
+        - "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+
     - name: Crear carpeta local para los JSON
-      file:
+      ansible.builtin.file:
         path: "{{ ruta_json_ctl }}"
         state: directory
         mode: "0755"
@@ -22,188 +33,156 @@
       become: false
 
   tasks:
-    # 1A) Escaneo rápido de PUERTOS de bases de datos (método wait_for)
+    # 1A) Escaneo de PUERTOS de bases de datos
     - name: Verificar MySQL (3306)
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
         port: 3306
-        timeout: 4
+        timeout: 2
       register: mysql_port
       ignore_errors: yes
 
     - name: Verificar PostgreSQL (5432)
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
         port: 5432
-        timeout: 4
+        timeout: 2
       register: postgres_port
       ignore_errors: yes
 
     - name: Verificar SQL Server (1433)
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
         port: 1433
-        timeout: 4
+        timeout: 2
       register: sqlserver_port
       ignore_errors: yes
 
     - name: Verificar Oracle (1521)
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
         port: 1521
-        timeout: 4
+        timeout: 2
       register: oracle_port
       ignore_errors: yes
 
     - name: Verificar MongoDB (27017)
-      wait_for:
+      ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
         port: 27017
-        timeout: 4
+        timeout: 2
       register: mongodb_port
       ignore_errors: yes
 
     - name: Consolidar resultado de puertos DB
-      set_fact:
+      ansible.builtin.set_fact:
         puertos_db:
-          mysql:      "{{ mysql_port    is defined and mysql_port.elapsed     < 3 }}"
-          postgresql: "{{ postgres_port is defined and postgres_port.elapsed  < 3 }}"
-          sqlserver:  "{{ sqlserver_port is defined and sqlserver_port.elapsed < 3 }}"
-          oracle:     "{{ oracle_port   is defined and oracle_port.elapsed    < 3 }}"
-          mongodb:    "{{ mongodb_port  is defined and mongodb_port.elapsed   < 3 }}"
+          mysql: "{{ 'SI' if mysql_port is defined and not mysql_port.failed else '-' }}"
+          postgresql: "{{ 'SI' if postgres_port is defined and not postgres_port.failed else '-' }}"
+          sqlserver: "{{ 'SI' if sqlserver_port is defined and not sqlserver_port.failed else '-' }}"
+          oracle: "{{ 'SI' if oracle_port is defined and not oracle_port.failed else '-' }}"
+          mongodb: "{{ 'SI' if mongodb_port is defined and not mongodb_port.failed else '-' }}"
 
-    # 1B) Listar TODOS los puertos TCP/UDP en escucha con ss/netstat
     - name: Obtener puertos TCP/UDP en escucha (ss)
-      shell: |
-        ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
+      ansible.builtin.shell: "ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq | xargs"
       register: listening_ports_cmd
-      changed_when: false
-      failed_when: false
 
-    - name: (Fallback) Obtener puertos de netstat si ss no está disponible
-      shell: |
-        netstat -lntu 2>/dev/null | awk 'NR>2 {print $4}' | awk -F':' '{print $NF}' | sort -n | uniq
-      register: listening_ports_netstat
-      changed_when: false
-      when: listening_ports_cmd.rc != 0
-
-    - name: Definir lista final de puertos en escucha
-      set_fact:
-        listening_ports: >-
-          {{
-            (listening_ports_cmd.rc == 0
-             and listening_ports_cmd.stdout_lines
-             or listening_ports_netstat.stdout_lines)
-          }}
-
-    - name: Mostrar puertos en escucha
-      debug:
-        msg: "Puertos en escucha en {{ inventory_hostname }}: {{ listening_ports }}"
-
-    - name: Obtener usuarios y grupos
-      shell: |
-        echo "Usuarios del sistema:" && getent passwd | awk -F: '{ print $1 " (UID: " $3 ", GID: " $4 ", Shell: " $7 ")" }'
-        echo "" && echo "Grupos del sistema:" && getent group
-      register: salida_usuarios
-      args:
-        executable: /bin/bash
-
-    - name: Mostrar usuarios y grupos
-      debug:
-        msg: "{{ salida_usuarios.stdout_lines }}"
-
-    # 1C) Guardar facts + puertos → JSON y traerlo al control
-    - name: Guardar facts + puertos en JSON en el host
-      copy:
-        content: "{{ ansible_facts
-                     | combine(puertos_db)
-                     | combine({'listening_ports': listening_ports})
-                     | combine({'usuarios': salida_usuarios.stdout_lines})
-                     | combine({'inventory_hostname': inventory_hostname})
-                     | to_nice_json }}"
+    - name: Guardar facts + puertos en JSON
+      ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
-        force: yes
+        content: |
+          {
+            "ip": "{{ inventory_hostname }}",
+            "hostname": "{{ ansible_hostname }}",
+            "os": "{{ ansible_os_family }} {{ ansible_distribution_version }}",
+            "fecha": "{{ ansible_date_time.date }} {{ ansible_date_time.time }}",
+            "puertos_db": {{ puertos_db | to_json }},
+            "listening_ports": "{{ listening_ports_cmd.stdout }}"
+          }
 
     - name: Traer JSON al nodo de control
-      fetch:
+      ansible.builtin.fetch:
         src: "{{ ruta_json_remoto }}"
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
 ########################################################################
-# 2. localhost: genera/actualiza Inventario_Equipos_DMZ.xlsx #
+# 2. Localhost: Generar Excel ÚNICO y VISUAL                           #
 ########################################################################
-- name: Añadir línea al Excel existente a partir de los JSON
+- name: Generar Excel Profesional
   hosts: localhost
   gather_facts: no
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    script_python: "/home/semaphore/Excels/append_excel.py"
     ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    script_python: "/home/semaphore/Excels/generar_excel.py"
 
   tasks:
-    - name: Copiar / actualizar script Python para añadir línea
-      copy:
-        src: "./append_excel.py"
+    - name: Crear Script Python de Consolidación Visual
+      ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
-        force: true
+        content: |
+          #!/usr/bin/env python3
+          import sys, os, json, glob
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-    - name: Buscar todos los JSON de inventario
-      find:
-        paths: "{{ ruta_json_ctl }}"
-        patterns: "info_*.json"
-        file_type: file
-      register: json_files
+          def run():
+              excel_path = sys.argv[1]
+              json_files = glob.glob(os.path.join(sys.argv[2], "info_*.json"))
+              wb = Workbook()
+              ws = wb.active
+              ws.title = "Inventario DMZ"
 
-    - name: Ejecutar script para añadir línea al Excel
-      command: >
-        python3 {{ script_python }} {{ ruta_excel }} {{ item }}
-      loop: "{{ json_files.files | map(attribute='path') | list }}"
-      register: excel_append
+              # Estilos
+              color_header = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+              color_zebra = PatternFill(start_color="F2F4F4", end_color="F2F4F4", fill_type="solid")
+              font_white = Font(color="FFFFFF", bold=True)
+              border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
-    - debug:
-        var: excel_append.results
+              headers = ["IP SERVIDOR", "HOSTNAME", "SISTEMA OP.", "FECHA ESCANEO", "MYSQL", "POSTGRES", "SQLSERV", "ORACLE", "MONGO", "TODOS LOS PUERTOS"]
+              ws.append(headers)
+              for cell in ws[1]:
+                  cell.fill, cell.font, cell.alignment = color_header, font_white, Alignment(horizontal="center")
 
-################################################################
-# 3. Windows: copiar al share \\srvctdep02\Deploy\Ansible ######
-################################################################
-- name: Copiar inventario a Ruta de red (ya montada en el sistema)
+              for f_path in sorted(json_files):
+                  with open(f_path, 'r') as f:
+                      d = json.load(f)
+                  pdb = d.get('puertos_db', {})
+                  row = [
+                      d.get('ip'), d.get('hostname'), d.get('os'), d.get('fecha'),
+                      pdb.get('mysql'), pdb.get('postgresql'), pdb.get('sqlserver'),
+                      pdb.get('oracle'), pdb.get('mongodb'), d.get('listening_ports')
+                  ]
+                  ws.append(row)
+                  curr = ws.max_row
+                  for cell in ws[curr]:
+                      cell.border = border
+                      cell.alignment = Alignment(horizontal="center")
+                      if curr % 2 == 0: cell.fill = color_zebra
+              
+              for col in ws.columns:
+                  ws.column_dimensions[col[0].column_letter].width = 20
+              ws.column_dimensions['J'].width = 50
+              wb.save(excel_path)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar script Python una sola vez
+      ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
+
+########################################################################
+# 3. Exportación al Recurso de Red                                     #
+########################################################################
+- name: Copiar archivos al Share
   hosts: localhost
-  gather_facts: no
-
-  vars:
-    src_dir:    "/home/semaphore/Excels"
-    excel_file: "Inventario_Equipos_DMZ.xlsx"
-    txt_file:   "Inventario_Equipos_DMZ.txt"
-    usuarios_txt_file: "usuarios_equipos.txt"
-    mountpoint: "/mnt/ansible_share"
-
   tasks:
-    - name: Verificar que el recurso ya está montado
-      stat:
-        path: "{{ mountpoint }}"
-      register: mount_status
-
-    - name: Fallar si no está montado
-      fail:
-        msg: "❌ El recurso {{ mountpoint }} no está montado. Monta primero la carpeta en el sistema."
-      when: not mount_status.stat.exists
-
-    - name: Copiar archivos al recurso compartido ya montado
+    - name: Verificar montaje y copiar
       become: true
-      copy:
-        src: "{{ src_dir }}/{{ item }}"
-        dest: "{{ mountpoint }}/{{ item }}"
+      ansible.builtin.copy:
+        src: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+        dest: "/mnt/ansible_share/Inventario_Equipos_DMZ.xlsx"
         mode: "0644"
-      loop:
-        - "{{ excel_file }}"
-        - "{{ txt_file }}"
-        - "{{ usuarios_txt_file }}"
-
-    - name: ✅ Mensaje final de éxito
-      debug:
-        msg: "✅ Archivos copiados correctamente a {{ mountpoint }}"
-
-
-
+        remote_src: true
