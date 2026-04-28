@@ -12,18 +12,16 @@
     ruta_json_ctl:    "/home/semaphore/Excels"
 
   pre_tasks:
-    - name: Limpiar datos antiguos para evitar duplicados
+    - name: Limpiar archivos JSON y Excel antiguos (sin borrar la carpeta)
       delegate_to: localhost
       run_once: true
       become: false
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "{{ ruta_json_ctl }}"
-        - "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+      ansible.builtin.shell: "rm -f {{ ruta_json_ctl }}/info_*.json {{ ruta_json_ctl }}/*.xlsx"
+      args:
+        removes: "{{ ruta_json_ctl }}" # Solo se ejecuta si la carpeta existe
+      ignore_errors: yes # Evita que el playbook se detenga si no hay archivos que borrar
 
-    - name: Crear carpeta local para los JSON
+    - name: Asegurar que la carpeta local existe
       ansible.builtin.file:
         path: "{{ ruta_json_ctl }}"
         state: directory
@@ -131,11 +129,14 @@
           def run():
               excel_path = sys.argv[1]
               json_files = glob.glob(os.path.join(sys.argv[2], "info_*.json"))
+              if not json_files:
+                  print("No se encontraron archivos JSON.")
+                  return
+
               wb = Workbook()
               ws = wb.active
               ws.title = "Inventario DMZ"
 
-              # Estilos
               color_header = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
               color_zebra = PatternFill(start_color="F2F4F4", end_color="F2F4F4", fill_type="solid")
               font_white = Font(color="FFFFFF", bold=True)
