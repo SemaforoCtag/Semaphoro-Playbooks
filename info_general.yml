@@ -28,7 +28,6 @@
       run_once: true
 
   tasks:
-    # 1A) Verificación de Puertos DB
     - name: Escaneo de Puertos Base de Datos
       ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
@@ -38,7 +37,6 @@
       ignore_errors: yes
       loop: [3306, 5432, 1433, 1521, 27017]
 
-    # 1B) Puertos y Usuarios
     - name: Obtener puertos TCP/UDP (ss)
       ansible.builtin.shell: "ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq | xargs"
       register: listening_ports_cmd
@@ -48,7 +46,6 @@
         getent passwd | cut -d: -f1 | while read u; do echo "$u:$(id -Gn $u | tr ' ' ',')"; done
       register: lista_usuarios_detallada
 
-    # 1C) Generar JSON con RAM y CPU
     - name: Guardar info en JSON
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
@@ -79,7 +76,7 @@
         flat: true
 
 ########################################################################
-# 2. Localhost: Generar Excel con RAM y CPU                           #
+# 2. Localhost: Generar Excel con Usuarios en una sola línea           #
 ########################################################################
 - name: Generar Reporte Consolidado
   hosts: localhost
@@ -90,7 +87,7 @@
     script_python: "/home/semaphore/Excels/generar_excel.py"
 
   tasks:
-    - name: Crear Script Python con Columnas RAM/CPU
+    - name: Crear Script Python (Usuarios en línea)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -109,7 +106,7 @@
               color_z = PatternFill(start_color="F2F4F4", end_color="F2F4F4", fill_type="solid")
               border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
-              headers = ["IP", "HOSTNAME", "OS", "CPU / PROCESADOR", "RAM TOTAL", "RAM EN USO", "FECHA", "MYSQL", "PGSQL", "SQLSRV", "ORACLE", "MONGO", "USUARIOS"]
+              headers = ["IP", "HOSTNAME", "OS", "CPU / PROCESADOR", "RAM TOTAL", "RAM EN USO", "FECHA", "MYSQL", "PGSQL", "SQLSRV", "ORACLE", "MONGO", "USUARIOS (U:GRUPOS)"]
               ws.append(headers)
               for cell in ws[1]:
                   cell.fill, cell.font, cell.alignment = color_h, Font(color="FFFFFF", bold=True), Alignment(horizontal="center")
@@ -121,24 +118,27 @@
                   ram_t = f"{round(d.get('ram_total_mb', 0)/1024, 2)} GB"
                   ram_u = f"{round(d.get('ram_uso_mb', 0)/1024, 2)} GB"
                   
+                  # AQUÍ ESTÁ EL CAMBIO: Unimos con espacio o punto y coma para que sea una sola línea
+                  users_str = " | ".join(d.get('usuarios_detallados', []))
+                  
                   row = [
                       d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu_modelo'),
                       ram_t, ram_u, d.get('fecha'),
                       "SI" if pdb.get('mysql') else "-", "SI" if pdb.get('postgres') else "-",
                       "SI" if pdb.get('sqlserver') else "-", "SI" if pdb.get('oracle') else "-",
-                      "SI" if pdb.get('mongo') else "-", "\n".join(d.get('usuarios_detallados', []))
+                      "SI" if pdb.get('mongo') else "-", users_str
                   ]
                   ws.append(row)
                   curr = ws.max_row
                   for i, cell in enumerate(ws[curr], 1):
                       cell.border = border
-                      cell.alignment = Alignment(horizontal="center", vertical="top")
-                      if i == 13: cell.alignment = Alignment(wrap_text=True, vertical="top")
+                      cell.alignment = Alignment(horizontal="left", vertical="center") # Alineado a la izquierda para leer mejor
                       if curr % 2 == 0: cell.fill = color_z
               
+              # Ajuste de anchos
               for col in ['A','B','C','D','E','F','G','H','I','J','K','L']: ws.column_dimensions[col].width = 18
-              ws.column_dimensions['D'].width = 35 # CPU
-              ws.column_dimensions['M'].width = 50 # Usuarios
+              ws.column_dimensions['D'].width = 30 # CPU
+              ws.column_dimensions['M'].width = 100 # Columna de usuarios muy ancha para la línea única
               wb.save(excel_path)
 
           if __name__ == "__main__":
