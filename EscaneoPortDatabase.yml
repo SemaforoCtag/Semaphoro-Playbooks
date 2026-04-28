@@ -1,28 +1,25 @@
 ---
 ########################################################################
-# 1. Recogida de datos MULTI-OS                                        #
+# 1. RECOGIDA DE SOFTWARE (Multi-OS)                                   #
 ########################################################################
-- name: Auditoría Universal de Servidores Linux
+- name: Auditoría de Software Instalado
   hosts: semaforos
   gather_facts: yes
   become: true
 
   vars:
-    # Definimos las rutas una sola vez aquí para usarlas en todo el playbook
     dir_excels: "/home/semaphore/Excels"
-    nombre_archivo: "Inventario_Sistemas_Completo.xlsx"
-    ruta_excel_final: "/home/semaphore/Excels/Inventario_Sistemas_Completo.xlsx"
-    ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
+    ruta_json_remoto: "/tmp/software_{{ inventory_hostname }}.json"
 
   pre_tasks:
-    - name: Limpiar temporales locales
+    - name: Limpiar entorno local
       delegate_to: localhost
       run_once: true
       become: false
-      ansible.builtin.shell: "rm -f {{ dir_excels }}/info_*.json {{ ruta_excel_final }}"
+      ansible.builtin.shell: "rm -f {{ dir_excels }}/software_*.json {{ dir_excels }}/*.xlsx"
       ignore_errors: yes
 
-    - name: Asegurar que la carpeta local existe
+    - name: Asegurar carpeta local
       ansible.builtin.file:
         path: "{{ dir_excels }}"
         state: directory
@@ -31,75 +28,51 @@
       run_once: true
 
   tasks:
-    - name: Obtener modelo real de CPU
-      ansible.builtin.shell: "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//'"
-      register: cpu_model_detailed
-
     - name: Listar software (RedHat/Rocky/CentOS)
       ansible.builtin.shell: "rpm -qa --queryformat '%{NAME} (%{VERSION})\n' | sort"
-      register: software_redhat
+      register: sw_redhat
       when: ansible_os_family == "RedHat"
 
     - name: Listar software (Debian/Ubuntu)
       ansible.builtin.shell: "dpkg-query -W -f='${Package} (${Version})\n' | sort"
-      register: software_debian
+      register: sw_debian
       when: ansible_os_family == "Debian"
 
-    - name: Consolidar software
+    - name: Consolidar lista
       ansible.builtin.set_fact:
-        software_final: "{{ software_redhat.stdout_lines if ansible_os_family == 'RedHat' else software_debian.stdout_lines }}"
+        lista_sw: "{{ sw_redhat.stdout_lines if ansible_os_family == 'RedHat' else sw_debian.stdout_lines }}"
 
-    - name: Puertos DB
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: "{{ item }}"
-        timeout: 1
-      register: db_ports
-      ignore_errors: yes
-      loop: [3306, 5432, 1433, 1521, 27017]
-
-    - name: Crear JSON técnico
+    - name: Crear JSON
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
         content: |
           {
             "ip": "{{ inventory_hostname }}",
             "hostname": "{{ ansible_hostname }}",
-            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
-            "cpu": "{{ cpu_model_detailed.stdout }} ({{ ansible_processor_vcpus }} vCPUs)",
-            "ram_total": "{{ (ansible_memtotal_mb / 1024) | round(2) }} GB",
-            "ram_uso": "{{ ((ansible_memtotal_mb - ansible_memfree_mb) / 1024) | round(2) }} GB",
-            "software": {{ software_final | to_json }},
-            "db": {
-               "mysql": {{ 'true' if db_ports.results[0].failed is not defined or not db_ports.results[0].failed else 'false' }},
-               "postgres": {{ 'true' if db_ports.results[1].failed is not defined or not db_ports.results[1].failed else 'false' }},
-               "sqlserver": {{ 'true' if db_ports.results[2].failed is not defined or not db_ports.results[2].failed else 'false' }},
-               "oracle": {{ 'true' if db_ports.results[3].failed is not defined or not db_ports.results[3].failed else 'false' }},
-               "mongo": {{ 'true' if db_ports.results[4].failed is not defined or not db_ports.results[4].failed else 'false' }}
-            }
+            "software": {{ lista_sw | to_json }}
           }
 
-    - name: Enviar al nodo control
+    - name: Descargar JSON al nodo control
       ansible.builtin.fetch:
         src: "{{ ruta_json_remoto }}"
         dest: "{{ dir_excels }}/"
         flat: true
 
 ########################################################################
-# 2. LOCALHOST: Generación de Excel                                    #
+# 2. GENERACIÓN DE EXCEL (Visualización Cómoda)                        #
 ########################################################################
-- name: Consolidar Inventario en Excel
+- name: Crear Reporte Visual
   hosts: localhost
   gather_facts: no
   vars:
     dir_excels: "/home/semaphore/Excels"
-    ruta_excel_final: "/home/semaphore/Excels/Inventario_Sistemas_Completo.xlsx"
-    script_python: "/home/semaphore/Excels/generar_excel_pro.py"
+    ruta_excel: "/home/semaphore/Excels/Inventario_ProgramasSRV.xlsx"
+    script_py: "/home/semaphore/Excels/generar_sw_excel.py"
 
   tasks:
-    - name: Crear Motor Python Pro
+    - name: Crear Script Python (Visual Pro)
       ansible.builtin.copy:
-        dest: "{{ script_python }}"
+        dest: "{{ script_py }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
@@ -109,50 +82,62 @@
 
           def run():
               ex_path, j_dir = sys.argv[1], sys.argv[2]
-              j_files = glob.glob(os.path.join(j_dir, "info_*.json"))
-              wb = Workbook(); ws = wb.active; ws.title = "Inventario"
+              j_files = glob.glob(os.path.join(j_dir, "software_*.json"))
+              wb = Workbook(); ws = wb.active; ws.title = "Software Instalado"
 
-              h_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+              # Estilos: Azul suave y gris
+              header_fill = PatternFill(start_color="34495E", end_color="34495E", fill_type="solid")
               white_font = Font(color="FFFFFF", bold=True)
-              
-              headers = ["IP", "HOSTNAME", "SISTEMA", "CPU", "RAM TOTAL", "RAM USO", "MYSQL", "PGS", "SQL", "ORA", "MG", "SOFTWARE"]
+              border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+              headers = ["DIRECCIÓN IP", "NOMBRE DEL SERVIDOR", "SOFTWARE Y VERSIONES DETECTADAS"]
               ws.append(headers)
+              
+              ws.freeze_panes = "A2"
               for cell in ws[1]:
-                  cell.fill, cell.font, cell.alignment = h_fill, white_font, Alignment(horizontal="center")
+                  cell.fill, cell.font, cell.alignment = header_fill, white_font, Alignment(horizontal="center")
 
               for f in sorted(j_files):
                   with open(f, 'r') as file:
                       d = json.load(file)
-                  db = d.get('db', {})
-                  row = [
-                      d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu'),
-                      d.get('ram_total'), d.get('ram_uso'),
-                      "SI" if db.get('mysql') else "-", "SI" if db.get('postgres') else "-",
-                      "SI" if db.get('sqlserver') else "-", "SI" if db.get('oracle') else "-",
-                      "SI" if db.get('mongo') else "-", " | ".join(d.get('software', []))
-                  ]
-                  ws.append(row)
+                  
+                  # Formato cómodo: un paquete por línea dentro de la celda
+                  sw_text = "\n".join(d.get('software', []))
+                  
+                  ws.append([d.get('ip'), d.get('hostname'), sw_text])
+                  
+                  curr_row = ws.max_row
+                  for cell in ws[curr_row]:
+                      cell.border = border
+                      # Alineación superior para que se lea como una lista
+                      cell.alignment = Alignment(vertical="top", wrap_text=(cell.column == 3))
+                      if curr_row % 2 == 0:
+                          cell.fill = PatternFill(start_color="F9F9F9", end_color="F9F9F9", fill_type="solid")
+
+              # Ajuste de anchos
+              ws.column_dimensions['A'].width = 20
+              ws.column_dimensions['B'].width = 25
+              ws.column_dimensions['C'].width = 90
               
-              ws.column_dimensions['L'].width = 100
+              ws.auto_filter.ref = ws.dimensions
               wb.save(ex_path)
 
           if __name__ == "__main__":
               run()
 
-    - name: Ejecutar script de generación
-      ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel_final }} {{ dir_excels }}"
+    - name: Generar Excel
+      ansible.builtin.command: "python3 {{ script_py }} {{ ruta_excel }} {{ dir_excels }}"
 
 ########################################################################
-# 3. EXPORTACIÓN FINAL                                                 #
+# 3. EXPORTACIÓN                                                       #
 ########################################################################
-- name: Publicar Inventario
+- name: Publicar Resultados
   hosts: localhost
   tasks:
     - name: Copiar al Share
       become: true
       ansible.builtin.copy:
-        # Usamos la ruta completa definida arriba
-        src: "/home/semaphore/Excels/Inventario_Sistemas_Completo.xlsx"
-        dest: "/mnt/ansible_share/Inventario_Sistemas_Completo.xlsx"
+        src: "/home/semaphore/Excels/Inventario_ProgramasSRV.xlsx"
+        dest: "/mnt/ansible_share/Inventario_ProgramasSRV.xlsx"
         mode: "0644"
         remote_src: true
