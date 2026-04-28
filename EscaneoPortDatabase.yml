@@ -1,6 +1,6 @@
 ---
 ########################################################################
-# 1. Recogida de datos MULTI-OS (Debian, Ubuntu, Rocky, CentOS, RHEL)  #
+# 1. Recogida de datos MULTI-OS (Ubuntu, Debian, Rocky, CentOS, RHEL)  #
 ########################################################################
 - name: Auditoría Universal de Servidores Linux
   hosts: semaforos
@@ -20,28 +20,28 @@
       ignore_errors: yes
 
   tasks:
-    # --- SECCIÓN HARDWARE ---
-    - name: Obtener modelo detallado de CPU
+    # --- HARDWARE DETALLADO ---
+    - name: Obtener modelo real de CPU
       ansible.builtin.shell: "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//'"
       register: cpu_model_detailed
 
-    # --- SECCIÓN SOFTWARE (Condicional por Familia de SO) ---
-    - name: Listar software en familias RedHat (Rocky, CentOS, RHEL)
+    # --- SOFTWARE POR FAMILIA ---
+    - name: Listar software (RedHat/Rocky/CentOS)
       ansible.builtin.shell: "rpm -qa --queryformat '%{NAME} (%{VERSION})\n' | sort"
       register: software_redhat
       when: ansible_os_family == "RedHat"
 
-    - name: Listar software en familias Debian (Ubuntu, Debian)
+    - name: Listar software (Debian/Ubuntu)
       ansible.builtin.shell: "dpkg-query -W -f='${Package} (${Version})\n' | sort"
       register: software_debian
       when: ansible_os_family == "Debian"
 
-    - name: Consolidar lista de software
+    - name: Consolidar software
       ansible.builtin.set_fact:
         software_final: "{{ software_redhat.stdout_lines if ansible_os_family == 'RedHat' else software_debian.stdout_lines }}"
 
-    # --- SECCIÓN SERVICIOS Y RED ---
-    - name: Escaneo de Puertos Críticos
+    # --- RED Y USUARIOS ---
+    - name: Puertos DB
       ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
         port: "{{ item }}"
@@ -50,12 +50,16 @@
       ignore_errors: yes
       loop: [3306, 5432, 1433, 1521, 27017]
 
-    - name: Obtener todos los puertos en escucha
+    - name: Todos los puertos abiertos
       ansible.builtin.shell: "ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq | xargs"
       register: listening_ports_cmd
 
-    # --- GENERACIÓN DE JSON ---
-    - name: Crear JSON con información técnica completa
+    - name: Obtener Usuarios
+      ansible.builtin.shell: "getent passwd | cut -d: -f1 | xargs"
+      register: lista_usuarios
+
+    # --- GENERAR JSON ---
+    - name: Crear JSON técnico
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
         content: |
@@ -66,9 +70,10 @@
             "cpu": "{{ cpu_model_detailed.stdout }} ({{ ansible_processor_vcpus }} vCPUs)",
             "ram_total": "{{ (ansible_memtotal_mb / 1024) | round(2) }} GB",
             "ram_uso": "{{ ((ansible_memtotal_mb - ansible_memfree_mb) / 1024) | round(2) }} GB",
-            "puertos_abiertos": "{{ listening_ports_cmd.stdout }}",
+            "puertos": "{{ listening_ports_cmd.stdout }}",
+            "usuarios": "{{ lista_usuarios.stdout }}",
             "software": {{ software_final | to_json }},
-            "puertos_db": {
+            "db": {
                "mysql": {{ 'true' if db_ports.results[0].failed is not defined or not db_ports.results[0].failed else 'false' }},
                "postgres": {{ 'true' if db_ports.results[1].failed is not defined or not db_ports.results[1].failed else 'false' }},
                "sqlserver": {{ 'true' if db_ports.results[2].failed is not defined or not db_ports.results[2].failed else 'false' }},
@@ -77,25 +82,25 @@
             }
           }
 
-    - name: Enviar JSON al controlador
+    - name: Enviar al nodo control
       ansible.builtin.fetch:
         src: "{{ ruta_json_remoto }}"
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
 ########################################################################
-# 2. LOCALHOST: Generar Excel Profesional Multi-Sistemas               #
+# 2. LOCALHOST: Generación de Excel con Visualización Premium          #
 ########################################################################
-- name: Consolidar Inventario en Excel
+- name: Consolidar Inventario Premium
   hosts: localhost
   gather_facts: no
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    ruta_excel:    "/home/semaphore/Excels/Inventario_Sistemas_Universal.xlsx"
-    script_python: "/home/semaphore/Excels/generar_excel_final.py"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_ProgramasSRV.xlsx"
+    script_python: "/home/semaphore/Excels/generar_excel_pro.py"
 
   tasks:
-    - name: Crear Script Python de Alto Rendimiento
+    - name: Crear Motor Python Pro
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -108,61 +113,73 @@
           def run():
               ex_path, j_dir = sys.argv[1], sys.argv[2]
               j_files = glob.glob(os.path.join(j_dir, "info_*.json"))
-              wb = Workbook(); ws = wb.active; ws.title = "Inventario Global"
+              wb = Workbook(); ws = wb.active; ws.title = "Inventario"
 
-              # Estilos de tabla profesional
-              header_style = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
-              zebra_style = PatternFill(start_color="F4F6F6", end_color="F4F6F6", fill_type="solid")
+              # Estilos Visuales
+              h_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+              z_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
               white_font = Font(color="FFFFFF", bold=True)
-              border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+              thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
-              cols = ["IP", "HOSTNAME", "SISTEMA", "CPU", "RAM TOTAL", "RAM USO", "MYSQL", "PGS", "SQL", "ORA", "MG", "PUERTOS", "SOFTWARE INSTALADO"]
-              ws.append(cols)
+              headers = ["IP", "HOSTNAME", "SISTEMA", "MODELO CPU", "RAM TOTAL", "RAM USO", "MYSQL", "PGS", "SQL", "ORA", "MG", "PUERTOS", "USUARIOS", "SOFTWARE INSTALADO"]
+              ws.append(headers)
+              
+              # Formatear Cabecera e Inmovilizar
+              ws.freeze_panes = "A2"
               for cell in ws[1]:
-                  cell.fill, cell.font, cell.alignment = header_style, white_font, Alignment(horizontal="center")
+                  cell.fill, cell.font, cell.alignment = h_fill, white_font, Alignment(horizontal="center")
 
               for f in sorted(j_files):
                   with open(f, 'r') as file:
                       d = json.load(file)
-                  pdb = d.get('puertos_db', {})
+                  db = d.get('db', {})
                   row = [
                       d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu'),
                       d.get('ram_total'), d.get('ram_uso'),
-                      "SI" if pdb.get('mysql') else "-", "SI" if pdb.get('postgres') else "-",
-                      "SI" if pdb.get('sqlserver') else "-", "SI" if pdb.get('oracle') else "-",
-                      "SI" if pdb.get('mongo') else "-",
-                      d.get('puertos_abiertos'),
+                      "SI" if db.get('mysql') else "-", "SI" if db.get('postgres') else "-",
+                      "SI" if db.get('sqlserver') else "-", "SI" if db.get('oracle') else "-",
+                      "SI" if db.get('mongo') else "-", d.get('puertos'), d.get('usuarios'),
                       " | ".join(d.get('software', []))
                   ]
                   ws.append(row)
                   curr = ws.max_row
                   for cell in ws[curr]:
-                      cell.border = border
-                      cell.alignment = Alignment(vertical="center", horizontal="left")
-                      if curr % 2 == 0: cell.fill = zebra_style
+                      cell.border = thin_border
+                      cell.alignment = Alignment(vertical="center", horizontal="left", wrap_text=False)
+                      if curr % 2 == 0: cell.fill = z_fill
+              
+              # Configurar columna de Software con WrapText para que sea cómoda
+              software_col = ws.column_dimensions['N']
+              software_col.width = 120
+              for row in ws.iter_rows(min_row=2, min_col=14, max_col=14):
+                  for cell in row:
+                      cell.alignment = Alignment(wrap_text=True, vertical="top")
 
-              # Ajuste de columnas (La de software es muy grande)
-              for col in ws.columns:
-                  ws.column_dimensions[col[0].column_letter].width = 18
-              ws.column_dimensions['M'].width = 120 
+              # Ajustar resto de columnas
+              dims = {'A':15, 'B':20, 'C':22, 'D':45, 'E':12, 'F':12, 'G':8, 'H':8, 'I':8, 'J':8, 'K':8, 'L':25, 'M':40}
+              for col, width in dims.items():
+                  ws.column_dimensions[col].width = width
+
+              # Añadir Autofiltros
+              ws.auto_filter.ref = ws.dimensions
               wb.save(ex_path)
 
           if __name__ == "__main__":
               run()
 
-    - name: Ejecutar motor de generación Excel
+    - name: Ejecutar script de generación
       ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
 
 ########################################################################
-# 3. EXPORTACIÓN: Copia al Share Final                                #
+# 3. EXPORTACIÓN                                                       #
 ########################################################################
 - name: Publicar Inventario
   hosts: localhost
   tasks:
-    - name: Copiar al recurso compartido
+    - name: Copiar al Share
       become: true
       ansible.builtin.copy:
-        src: "/home/semaphore/Excels/Inventario_Sistemas_Universal.xlsx"
-        dest: "/mnt/ansible_share/Inventario_Sistemas_Universal.xlsx"
+        src: "/home/semaphore/ExcelsInventario_ProgramasSRV.xlsx"
+        dest: "/mnt/ansible_share/Inventario_ProgramasSRV.xlsx"
         mode: "0644"
         remote_src: true
