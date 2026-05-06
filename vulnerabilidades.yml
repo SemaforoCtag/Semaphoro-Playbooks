@@ -8,28 +8,35 @@
     ruta_json_ctl: "/home/semaphore/Excels"
 
   tasks:
-    - name: (Debian/Ubuntu) Obtener versión actual y versión de seguridad
+    - name: (Debian/Ubuntu) Obtener versiones de seguridad
       ansible.builtin.shell: |
         apt-get update > /dev/null
-        # Formato: nombre;versión_actual;versión_seguridad
-        apt-get --just-print upgrade | grep -i security | awk '{print $2}' | uniq | while read pkg; do
-            current=$(dpkg-query -W -f='${Version}' $pkg)
-            candidate=$(apt-cache policy $pkg | grep "Candidate:" | awk '{print $2}')
-            echo "$pkg;$current;$candidate"
-        done
+        # Extraemos todo de una vez para evitar bucles lentos
+        apt-get --just-print upgrade | grep -i security | awk '{print $2}' | uniq | xargs -I {} sh -c '
+          echo "{};$(dpkg-query -W -f="\${Version}" {});$(apt-cache policy {} | grep "Candidate:" | awk "{print \$2}")"
+        '
       register: vulns_debian
       when: ansible_os_family == "Debian"
+      async: 300  # Permite que la tarea corra hasta 5 min
+      poll: 5     # Revisa el estado cada 5 seg
 
-    - name: (RHEL/CentOS/Rocky) Obtener detalles de seguridad
+    - name: (RHEL/CentOS/Rocky) Obtener detalles de seguridad optimizado
       ansible.builtin.shell: |
-        dnf updateinfo list security --installed -q | grep -v "ID" | awk '{print $3}' | while read pkg; do
-            info=$(dnf list installed $pkg -q | tail -n 1)
-            current=$(echo $info | awk '{print $2}')
-            candidate=$(dnf check-update --security -q | grep "^$pkg" | awk '{print $2}')
-            echo "$pkg;$current;$candidate"
-        done
+        # 1. Sacamos la lista de paquetes con updates de seguridad una sola vez
+        dnf check-update --security -q | grep -E '^\S+' | awk '{print $1}' > /tmp/pkgs_list.txt
+        
+        # 2. Procesamos la información localmente
+        while read pkg; do
+            # Quitamos la arquitectura si viene pegada (ej: .x86_64)
+            p_clean=$(echo $pkg | cut -d. -f1)
+            current=$(rpm -q --queryformat '%{VERSION}-%{RELEASE}' $p_clean)
+            candidate=$(dnf list updates $p_clean -q | grep "^$p_clean" | awk '{print $2}')
+            echo "$p_clean;$current;$candidate"
+        done < /tmp/pkgs_list.txt
       register: vulns_rhel
       when: ansible_os_family == "RedHat"
+      async: 400
+      poll: 10
 
     - name: Preparar lista enriquecida
       ansible.builtin.set_fact:
