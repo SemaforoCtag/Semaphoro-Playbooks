@@ -128,3 +128,33 @@
     - name: Mostrar LOGS del script (REVISAR ESTO)
       ansible.builtin.debug:
         msg: "{{ out_python.stdout_lines }}"
+        
+########################################################################
+# 3. Exportación Final al Recurso de Red                              #
+########################################################################
+- name: Exportar Reporte a Carpeta Compartida
+  hosts: localhost
+  become: true  # Necesario para escribir en puntos de montaje /mnt
+  tasks:
+    - name: Verificar si el punto de montaje existe
+      ansible.builtin.stat:
+        path: "/mnt/ansible_share"
+      register: mount_status
+
+    - name: Mostrar error si no existe el destino
+      ansible.builtin.fail:
+        msg: "ERROR: El directorio /mnt/ansible_share no existe o no está montado."
+      when: not mount_status.stat.exists
+
+    - name: Copiar Excel al Share de Red
+      ansible.builtin.copy:
+        src: "/home/semaphore/Excels/Reporte_Vulnerabilidades.xlsx"
+        dest: "/mnt/ansible_share/Reporte_Vulnerabilidades.xlsx"
+        mode: "0666"        # Permisos de lectura/escritura para todos
+        remote_src: true    # Indica que el archivo ya está en el nodo de control
+      register: copy_result
+
+    - name: Confirmación de Copia
+      ansible.builtin.debug:
+        msg: "El archivo se ha copiado correctamente a /mnt/ansible_share"
+      when: copy_result.changed
