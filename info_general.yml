@@ -47,3 +47,80 @@
         port: 1433
         timeout: 4
       register: sqlserver_port
+      ignore_errors: true
+
+    - name: Verificar Oracle (1521)
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 1521
+        timeout: 4
+      register: oracle_port
+      ignore_errors: true
+
+    - name: Verificar MongoDB (27017)
+      ansible.builtin.wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 27017
+        timeout: 4
+      register: mongodb_port
+      ignore_errors: true
+
+    - name: Consolidar resultado de puertos DB
+      ansible.builtin.set_fact:
+        puertos_db:
+          mysql:      "{{ mysql_port.elapsed     is defined and mysql_port.elapsed     < 3 }}"
+          postgresql: "{{ postgres_port.elapsed  is defined and postgres_port.elapsed  < 3 }}"
+          sqlserver:  "{{ sqlserver_port.elapsed is defined and sqlserver_port.elapsed < 3 }}"
+          oracle:     "{{ oracle_port.elapsed    is defined and oracle_port.elapsed    < 3 }}"
+          mongodb:    "{{ mongodb_port.elapsed   is defined and mongodb_port.elapsed   < 3 }}"
+
+    ####################################################################
+    # 1B) Puertos en escucha
+    ####################################################################
+    - name: Obtener puertos TCP/UDP en escucha (ss)
+      ansible.builtin.shell: |
+        ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
+      register: listening_ports_cmd
+      changed_when: false
+      failed_when: false
+
+    - name: (Fallback) netstat si ss no existe
+      ansible.builtin.shell: |
+        netstat -lntu 2>/dev/null | awk 'NR>2 {print $4}' | awk -F':' '{print $NF}' | sort -n | uniq
+      register: listening_ports_netstat
+      changed_when: false
+      when: listening_ports_cmd.rc != 0
+
+    - name: Definir lista final de puertos
+      ansible.builtin.set_fact:
+        listening_ports: >-
+          {{
+            listening_ports_cmd.rc == 0
+            | ternary(listening_ports_cmd.stdout_lines,
+                      listening_ports_netstat.stdout_lines)
+          }}
+
+    ####################################################################
+    # 1C) Usuarios
+    ####################################################################
+    - name: Obtener usuarios y grupos
+      ansible.builtin.shell: |
+        getent passwd | awk -F: '{print $1 " (UID:" $3 ", GID:" $4 ", Shell:" $7 ")"}'
+      register: salida_usuarios
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    ####################################################################
+    # 1D) Guardar JSON
+    ####################################################################
+    - name: Guardar facts + puertos en JSON
+      ansible.builtin.copy:
+        dest: "{{ ruta_json_remoto }}"
+        force: true
+        content: |
+          {
+            "inventory_hostname": "{{ inventory_hostname }}",
+            "hostname": "{{ ansible_hostname }}",
+            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
+            "fecha": "{{ ansible_date_time.iso8601 }}",
