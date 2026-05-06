@@ -91,14 +91,16 @@
       changed_when: false
       when: listening_ports_cmd.rc != 0
 
-    - name: Definir lista final de puertos
-      ansible.builtin.set_fact:
-        listening_ports: >-
-          {{
-            listening_ports_cmd.rc == 0
-            | ternary(listening_ports_cmd.stdout_lines,
-                      listening_ports_netstat.stdout_lines)
-          }}
+    - name: Definir lista final de puertos en escucha
+  set_fact:
+    listening_ports: >-
+      {{
+        (listening_ports_cmd.rc == 0)
+        | ternary(
+            listening_ports_cmd.stdout_lines | default([]),
+            listening_ports_netstat.stdout_lines | default([])
+          )
+      }}
 
     ####################################################################
     # 1C) Usuarios
