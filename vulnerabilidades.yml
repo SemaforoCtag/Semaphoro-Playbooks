@@ -1,0 +1,112 @@
+---
+########################################################################
+# 1. Escaneo de parches de seguridad pendientes                       #
+########################################################################
+- name: Escaneo de Vulnerabilidades (Parches de Seguridad)
+  hosts: semaforos
+  gather_facts: yes
+  become: true
+
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+
+  tasks:
+    - name: (Debian/Ubuntu) Buscar actualizaciones de seguridad
+      ansible.builtin.shell: |
+        apt-get update > /dev/null
+        apt-get --just-print upgrade | grep -i security | awk '{print $2}' | uniq
+      register: vulns_debian
+      when: ansible_os_family == "Debian"
+
+    - name: (RHEL/CentOS/Rocky) Buscar avisos de seguridad
+      ansible.builtin.shell: |
+        dnf updateinfo list security --installed -q | awk '{print $3}' | grep -v "ID"
+      register: vulns_rhel
+      when: ansible_os_family == "RedHat"
+
+    - name: Preparar lista de vulnerabilidades
+      ansible.builtin.set_fact:
+        lista_vulns: "{{ vulns_debian.stdout_lines if ansible_os_family == 'Debian' else vulns_rhel.stdout_lines | default([]) }}"
+
+    - name: Generar JSON por Host
+      ansible.builtin.copy:
+        dest: "/tmp/vuln_{{ inventory_hostname }}.json"
+        content: |
+          {
+            "hostname": "{{ ansible_hostname }}",
+            "ip": "{{ inventory_hostname }}",
+            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
+            "total_vulns": {{ lista_vulns | length }},
+            "detalles": {{ lista_vulns | to_json }}
+          }
+
+    - name: Descargar al Nodo de Control
+      ansible.builtin.fetch:
+        src: "/tmp/vuln_{{ inventory_hostname }}.json"
+        dest: "{{ ruta_json_ctl }}/"
+        flat: true
+
+########################################################################
+# 2. Generar Excel de Seguridad en Localhost                          #
+########################################################################
+- name: Consolidar Reporte de Seguridad
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    ruta_excel: "/home/semaphore/Excels/Reporte_Vulnerabilidades.xlsx"
+    script_python: "/home/semaphore/Excels/generar_vuln_excel.py"
+
+  tasks:
+    - name: Crear Script Python de Seguridad
+      ansible.builtin.copy:
+        dest: "{{ script_python }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import sys, os, json, glob
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill, Alignment
+
+          def run():
+              excel_path, json_dir = sys.argv[1], sys.argv[2]
+              json_files = glob.glob(os.path.join(json_dir, "vuln_*.json"))
+              
+              wb = Workbook(); ws = wb.active; ws.title = "Vulnerabilidades"
+              
+              # Cabeceras
+              headers = ["HOSTNAME", "IP", "S.O.", "TOTAL PARCHES SEGURIDAD", "PAQUETES AFECTADOS"]
+              ws.append(headers)
+              
+              # Estilo Crítico (Rojo)
+              red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+              bold_font = Font(bold=True)
+
+              for f_path in sorted(json_files):
+                  with open(f_path, 'r') as f:
+                      d = json.load(f)
+                  
+                  # Si tiene vulnerabilidades, destacamos en rojo
+                  row = [
+                      d['hostname'], d['ip'], d['os'], 
+                      d['total_vulns'], "\n".join(d['detalles'])
+                  ]
+                  ws.append(row)
+                  
+                  if d['total_vulns'] > 0:
+                      for cell in ws[ws.max_row]:
+                          cell.fill = red_fill
+
+              # Formato
+              for col in ['A','B','C','D']: ws.column_dimensions[col].width = 20
+              ws.column_dimensions['E'].width = 60
+              for row in ws.iter_rows(min_row=2):
+                  for cell in row: cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+              wb.save(excel_path)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar generación de Excel
+      ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
