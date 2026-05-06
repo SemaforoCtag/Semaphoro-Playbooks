@@ -1,160 +1,125 @@
 ---
-- name: Escaneo de Vulnerabilidades y Parches
+- name: Escaneo de Seguridad Detallado (Versiones de Paquetes)
   hosts: semaforos
   gather_facts: yes
   become: true
 
   vars:
-    # Asegúrate de que esta ruta existe y el usuario tiene permisos
     ruta_json_ctl: "/home/semaphore/Excels"
 
   tasks:
-    - name: Limpiar JSONs antiguos (Evitar datos basura)
-      delegate_to: localhost
-      ansible.builtin.shell: "rm -f {{ ruta_json_ctl }}/vuln_*.json"
-      run_once: true
-      ignore_errors: yes
-
-    - name: (Debian/Ubuntu) Buscar actualizaciones de seguridad
+    - name: (Debian/Ubuntu) Obtener versión actual y versión de seguridad
       ansible.builtin.shell: |
         apt-get update > /dev/null
-        apt-get --just-print upgrade | grep -i security | awk '{print $2}' | uniq
+        # Formato: nombre;versión_actual;versión_seguridad
+        apt-get --just-print upgrade | grep -i security | awk '{print $2}' | uniq | while read pkg; do
+            current=$(dpkg-query -W -f='${Version}' $pkg)
+            candidate=$(apt-cache policy $pkg | grep "Candidate:" | awk '{print $2}')
+            echo "$pkg;$current;$candidate"
+        done
       register: vulns_debian
       when: ansible_os_family == "Debian"
 
-    - name: (RHEL/CentOS/Rocky) Buscar avisos de seguridad
+    - name: (RHEL/CentOS/Rocky) Obtener detalles de seguridad
       ansible.builtin.shell: |
-        dnf updateinfo list security --installed -q | awk '{print $3}' | grep -v "ID" | grep -v "Security"
+        dnf updateinfo list security --installed -q | grep -v "ID" | awk '{print $3}' | while read pkg; do
+            info=$(dnf list installed $pkg -q | tail -n 1)
+            current=$(echo $info | awk '{print $2}')
+            candidate=$(dnf check-update --security -q | grep "^$pkg" | awk '{print $2}')
+            echo "$pkg;$current;$candidate"
+        done
       register: vulns_rhel
       when: ansible_os_family == "RedHat"
 
-    - name: Preparar lista de vulnerabilidades
+    - name: Preparar lista enriquecida
       ansible.builtin.set_fact:
-        lista_vulns: "{{ vulns_debian.stdout_lines if ansible_os_family == 'Debian' else (vulns_rhel.stdout_lines | default([])) }}"
+        lista_final: "{{ vulns_debian.stdout_lines if ansible_os_family == 'Debian' else (vulns_rhel.stdout_lines | default([])) }}"
 
     - name: Generar JSON por Host
       ansible.builtin.copy:
-        dest: "/tmp/vuln_{{ inventory_hostname }}.json"
+        dest: "/tmp/vuln_detailed_{{ inventory_hostname }}.json"
         content: |
           {
             "hostname": "{{ ansible_hostname }}",
             "ip": "{{ inventory_hostname }}",
             "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
-            "total_vulns": {{ lista_vulns | length }},
-            "detalles": {{ lista_vulns | to_json }}
+            "parches": {{ lista_final | to_json }}
           }
 
-    - name: Descargar al Nodo de Control (Flat mode)
+    - name: Descargar al Nodo de Control
       ansible.builtin.fetch:
-        src: "/tmp/vuln_{{ inventory_hostname }}.json"
+        src: "/tmp/vuln_detailed_{{ inventory_hostname }}.json"
         dest: "{{ ruta_json_ctl }}/"
         flat: true
 
 ########################################################################
-# GENERACIÓN DEL EXCEL CON VERIFICACIÓN
+# GENERACIÓN DE EXCEL CON COMPARATIVA DE VERSIONES
 ########################################################################
-- name: Consolidar Reporte de Seguridad
+- name: Generar Excel de Parches
   hosts: localhost
   gather_facts: no
   vars:
     ruta_json_ctl: "/home/semaphore/Excels"
-    ruta_excel: "/home/semaphore/Excels/Reporte_Vulnerabilidades.xlsx"
-    script_python: "/home/semaphore/Excels/generar_vuln_excel.py"
+    ruta_excel: "/home/semaphore/Excels/Plan_de_Actualizacion_Seguridad.xlsx"
+    script_python: "/home/semaphore/Excels/generar_vuln_v2.py"
 
   tasks:
-    - name: Crear Script Python con Logs de depuración
+    - name: Crear Script Python V2 (Comparativo)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
         content: |
           #!/usr/bin/env python3
           import sys, os, json, glob
-          try:
-              from openpyxl import Workbook
-              from openpyxl.styles import Font, PatternFill, Alignment
-          except ImportError:
-              print("CRITICAL: openpyxl no instalado")
-              sys.exit(1)
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
           def run():
               excel_path, json_dir = sys.argv[1], sys.argv[2]
-              # Buscamos exactamente el prefijo vuln_
-              json_files = glob.glob(os.path.join(json_dir, "vuln_*.json"))
+              json_files = glob.glob(os.path.join(json_dir, "vuln_detailed_*.json"))
               
-              print(f"DEBUG: Buscando archivos en {json_dir}")
-              print(f"DEBUG: Archivos encontrados: {len(json_files)}")
-
-              if len(json_files) == 0:
-                  print("ERROR: No se encontraron archivos JSON para procesar.")
-                  sys.exit(1)
-
               wb = Workbook()
               ws = wb.active
-              ws.title = "Vulnerabilidades"
+              ws.title = "Plan de Parcheo"
               
-              headers = ["HOSTNAME", "IP", "S.O.", "TOTAL PARCHES", "PAQUETES"]
+              headers = ["HOSTNAME", "IP", "PAQUETE", "VERSIÓN ACTUAL", "VERSIÓN SEGURIDAD (Update)"]
               ws.append(headers)
               
-              red_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-              bold_font = Font(bold=True)
+              # Estilos
+              header_fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
+              white_font = Font(color="FFFFFF", bold=True)
+              border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+              for cell in ws[1]:
+                  cell.fill, cell.font = header_fill, white_font
 
               for f_path in sorted(json_files):
-                  print(f"DEBUG: Procesando {os.path.basename(f_path)}")
                   with open(f_path, 'r') as f:
                       d = json.load(f)
                   
-                  row = [d['hostname'], d['ip'], d['os'], d['total_vulns'], "\n".join(d['detalles'])]
-                  ws.append(row)
-                  
-                  if d['total_vulns'] > 0:
-                      for cell in ws[ws.max_row]:
-                          cell.fill = red_fill
+                  for item in d.get('parches', []):
+                      if ';' in item:
+                          nombre, actual, nueva = item.split(';')
+                          ws.append([d['hostname'], d['ip'], nombre, actual, nueva])
+                          for cell in ws[ws.max_row]:
+                              cell.border = border
 
-              # Auto-ajuste básico
-              ws.column_dimensions['A'].width = 20
-              ws.column_dimensions['B'].width = 15
-              ws.column_dimensions['E'].width = 60
+              # Ajustar anchos
+              for col in ['A','B','C','D','E']:
+                  ws.column_dimensions[col].width = 25
 
               wb.save(excel_path)
-              print(f"SUCCESS: Excel guardado en {excel_path}")
 
           if __name__ == "__main__":
               run()
 
-    - name: Ejecutar script de Python y capturar salida
+    - name: Ejecutar generación de Excel
       ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
-      register: out_python
 
-    - name: Mostrar LOGS del script (REVISAR ESTO)
-      ansible.builtin.debug:
-        msg: "{{ out_python.stdout_lines }}"
-        
-########################################################################
-# 3. Exportación Final al Recurso de Red                              #
-########################################################################
-- name: Exportar Reporte a Carpeta Compartida
-  hosts: localhost
-  become: true  # Necesario para escribir en puntos de montaje /mnt
-  tasks:
-    - name: Verificar si el punto de montaje existe
-      ansible.builtin.stat:
-        path: "/mnt/ansible_share"
-      register: mount_status
-
-    - name: Mostrar error si no existe el destino
-      ansible.builtin.fail:
-        msg: "ERROR: El directorio /mnt/ansible_share no existe o no está montado."
-      when: not mount_status.stat.exists
-
-    - name: Copiar Excel al Share de Red
+    - name: Exportar al Share (CON SUDO)
+      become: true
       ansible.builtin.copy:
-        src: "/home/semaphore/Excels/Reporte_Vulnerabilidades.xlsx"
-        dest: "/mnt/ansible_share/Reporte_Vulnerabilidades.xlsx"
-        mode: "0666"        # Permisos de lectura/escritura para todos
-        remote_src: true    # Indica que el archivo ya está en el nodo de control
-      register: copy_result
-
-    - name: Confirmación de Copia
-      ansible.builtin.debug:
-        msg: "El archivo se ha copiado correctamente a /mnt/ansible_share"
-      when: copy_result.changed
+        src: "{{ ruta_excel }}"
+        dest: "/mnt/ansible_share/Plan_de_Actualizacion_Seguridad.xlsx"
+        mode: "0666"
+        remote_src: true
