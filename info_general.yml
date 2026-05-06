@@ -1,6 +1,6 @@
----
+--
 ########################################################################
-# 1. Linux (semaforos): facts + PUERTOS → JSON → fetch al nodo control #
+# 1. Linux (semaforos): Recogida de datos completa + CPU Detallada     #
 ########################################################################
 - name: Recoger facts y escanear puertos
   hosts: semaforos
@@ -9,120 +9,139 @@
 
   vars:
     ruta_json_remoto: "/tmp/info_{{ inventory_hostname }}.json"
-    ruta_json_ctl: "/home/semaphore/Excels"
-
-  pre_tasks:
-    - name: Crear carpeta local para los JSON
-      ansible.builtin.file:
-        path: "{{ ruta_json_ctl }}"
-        state: directory
-        mode: "0755"
-      delegate_to: localhost
-      run_once: true
-      become: false
+    ruta_json_ctl:    "/home/semaphore/Excels"
 
   tasks:
-    ####################################################################
-    # 1A) Escaneo rápido de puertos DB
-    ####################################################################
-    - name: Verificar MySQL (3306)
+    - name: Escaneo de Puertos Base de Datos
       ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
-        port: 3306
-        timeout: 4
-      register: mysql_port
-      ignore_errors: true
+        port: "{{ item }}"
+        timeout: 1
+      register: db_ports
+      ignore_errors: yes
+      loop: [3306, 5432, 1433, 1521, 27017]
 
-    - name: Verificar PostgreSQL (5432)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 5432
-        timeout: 4
-      register: postgres_port
-      ignore_errors: true
-
-    - name: Verificar SQL Server (1433)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 1433
-        timeout: 4
-      register: sqlserver_port
-      ignore_errors: true
-
-    - name: Verificar Oracle (1521)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 1521
-        timeout: 4
-      register: oracle_port
-      ignore_errors: true
-
-    - name: Verificar MongoDB (27017)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 27017
-        timeout: 4
-      register: mongodb_port
-      ignore_errors: true
-
-    - name: Consolidar resultado de puertos DB
-      ansible.builtin.set_fact:
-        puertos_db:
-          mysql:      "{{ mysql_port.elapsed     is defined and mysql_port.elapsed     < 3 }}"
-          postgresql: "{{ postgres_port.elapsed  is defined and postgres_port.elapsed  < 3 }}"
-          sqlserver:  "{{ sqlserver_port.elapsed is defined and sqlserver_port.elapsed < 3 }}"
-          oracle:     "{{ oracle_port.elapsed    is defined and oracle_port.elapsed    < 3 }}"
-          mongodb:    "{{ mongodb_port.elapsed   is defined and mongodb_port.elapsed   < 3 }}"
-
-    ####################################################################
-    # 1B) Puertos en escucha
-    ####################################################################
-    - name: Obtener puertos TCP/UDP en escucha (ss)
-      ansible.builtin.shell: |
-        ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
+    - name: Obtener puertos TCP/UDP (ss)
+      ansible.builtin.shell: "ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq | xargs"
       register: listening_ports_cmd
-      changed_when: false
-      failed_when: false
 
-    - name: (Fallback) netstat si ss no existe
+    - name: Obtener nombre real de la CPU (Modelo detallado)
+      ansible.builtin.shell: "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//'"
+      register: cpu_model_detailed
+
+    - name: Obtener lista de Usuarios
       ansible.builtin.shell: |
-        netstat -lntu 2>/dev/null | awk 'NR>2 {print $4}' | awk -F':' '{print $NF}' | sort -n | uniq
-      register: listening_ports_netstat
-      changed_when: false
-      when: listening_ports_cmd.rc != 0
+        getent passwd | cut -d: -f1 | while read u; do echo "$u:$(id -Gn $u | tr ' ' ',')"; done
+      register: lista_usuarios_detallada
 
-    - name: Definir lista final de puertos en escucha
-  set_fact:
-    listening_ports: >-
-      {{
-        (listening_ports_cmd.rc == 0)
-        | ternary(
-            listening_ports_cmd.stdout_lines | default([]),
-            listening_ports_netstat.stdout_lines | default([])
-          )
-      }}
-
-    ####################################################################
-    # 1C) Usuarios
-    ####################################################################
-    - name: Obtener usuarios y grupos
-      ansible.builtin.shell: |
-        getent passwd | awk -F: '{print $1 " (UID:" $3 ", GID:" $4 ", Shell:" $7 ")"}'
-      register: salida_usuarios
-      args:
-        executable: /bin/bash
-      changed_when: false
-
-    ####################################################################
-    # 1D) Guardar JSON
-    ####################################################################
-    - name: Guardar facts + puertos en JSON
+    - name: Guardar info en JSON
       ansible.builtin.copy:
         dest: "{{ ruta_json_remoto }}"
-        force: true
         content: |
           {
-            "inventory_hostname": "{{ inventory_hostname }}",
+            "ip": "{{ inventory_hostname }}",
             "hostname": "{{ ansible_hostname }}",
-            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
-            "fecha": "{{ ansible_date_time.iso8601 }}",
+            "os": "{{ ansible_os_family }} {{ ansible_distribution_version }}",
+            "fecha": "{{ ansible_date_time.date }} {{ ansible_date_time.time }}",
+            "cpu_modelo": "{{ cpu_model_detailed.stdout }} ({{ ansible_processor_vcpus }} vCPUs)",
+            "ram_total_mb": {{ ansible_memtotal_mb }},
+            "ram_uso_mb": {{ ansible_memtotal_mb - ansible_memfree_mb }},
+            "puertos_db": {
+               "mysql": {{ 'true' if db_ports.results[0].failed is not defined or not db_ports.results[0].failed else 'false' }},
+               "postgres": {{ 'true' if db_ports.results[1].failed is not defined or not db_ports.results[1].failed else 'false' }},
+               "sqlserver": {{ 'true' if db_ports.results[2].failed is not defined or not db_ports.results[2].failed else 'false' }},
+               "oracle": {{ 'true' if db_ports.results[3].failed is not defined or not db_ports.results[3].failed else 'false' }},
+               "mongo": {{ 'true' if db_ports.results[4].failed is not defined or not db_ports.results[4].failed else 'false' }}
+            },
+            "listening_ports": "{{ listening_ports_cmd.stdout }}",
+            "usuarios_detallados": {{ lista_usuarios_detallada.stdout_lines | to_json }}
+          }
+
+    - name: Traer JSON al nodo de control
+      ansible.builtin.fetch:
+        src: "{{ ruta_json_remoto }}"
+        dest: "{{ ruta_json_ctl }}/"
+        flat: true
+
+########################################################################
+# 2. Localhost: Generar Excel con CPU Detallada                       #
+########################################################################
+- name: Generar Reporte Consolidado
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+    script_python: "/home/semaphore/Excels/generar_excel.py"
+
+  tasks:
+    - name: Crear Script Python
+      ansible.builtin.copy:
+        dest: "{{ script_python }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import sys, os, json, glob
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+          def run():
+              excel_path, json_dir = sys.argv[1], sys.argv[2]
+              json_files = glob.glob(os.path.join(json_dir, "info_*.json"))
+              wb = Workbook(); ws = wb.active; ws.title = "Inventario DMZ"
+
+              color_h = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
+              color_z = PatternFill(start_color="F2F4F4", end_color="F2F4F4", fill_type="solid")
+              border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+              headers = ["IP", "HOSTNAME", "OS", "MODELO CPU", "RAM TOTAL", "RAM USO", "FECHA", "MYSQL", "PGSQL", "SQLSRV", "ORACLE", "MONGO", "USUARIOS"]
+              ws.append(headers)
+              for cell in ws[1]:
+                  cell.fill, cell.font, cell.alignment = color_h, Font(color="FFFFFF", bold=True), Alignment(horizontal="center")
+
+              for f_path in sorted(json_files):
+                  with open(f_path, 'r') as f:
+                      d = json.load(f)
+                  pdb = d.get('puertos_db', {})
+                  ram_t = f"{round(d.get('ram_total_mb', 0)/1024, 2)} GB"
+                  ram_u = f"{round(d.get('ram_uso_mb', 0)/1024, 2)} GB"
+                  users_str = " | ".join(d.get('usuarios_detallados', []))
+                  
+                  row = [
+                      d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu_modelo'),
+                      ram_t, ram_u, d.get('fecha'),
+                      "SI" if pdb.get('mysql') else "-", "SI" if pdb.get('postgres') else "-",
+                      "SI" if pdb.get('sqlserver') else "-", "SI" if pdb.get('oracle') else "-",
+                      "SI" if pdb.get('mongo') else "-", users_str
+                  ]
+                  ws.append(row)
+                  curr = ws.max_row
+                  for cell in ws[curr]:
+                      cell.border = border
+                      cell.alignment = Alignment(horizontal="left", vertical="center")
+                      if ws.max_row % 2 == 0: cell.fill = color_z
+              
+              for col in ['A','B','C','D','E','F','G','H','I','J','K','L']: ws.column_dimensions[col].width = 18
+              ws.column_dimensions['D'].width = 45 # Modelo CPU más ancho
+              ws.column_dimensions['M'].width = 100 
+              wb.save(excel_path)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar script Python
+      ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
+
+########################################################################
+# 3. Exportación Final                                                 #
+########################################################################
+- name: Copiar al Share
+  hosts: localhost
+  tasks:
+    - name: Mover al recurso de red
+      become: true
+      ansible.builtin.copy:
+        src: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
+        dest: "/mnt/ansible_share/Inventario_Equipos_DMZ.xlsx"
+        mode: "0644"
+        remote_src: true
