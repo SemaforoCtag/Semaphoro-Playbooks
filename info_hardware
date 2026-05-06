@@ -1,0 +1,152 @@
+---
+- name: Auditoría Completa de Hardware Pro
+  hosts: semaforos
+  gather_facts: yes
+  become: true
+
+  vars:
+    ruta_json_remoto: "/tmp/hw_full_{{ inventory_hostname }}.json"
+    ruta_json_ctl:    "/home/semaphore/Excels"
+
+  tasks:
+    - name: Extraer info detallada de RAM (Slots y Sockets)
+      ansible.builtin.shell: "dmidecode -t memory | grep -E 'Capacity:|Size:|Locator:|Type:|Speed:|Manufacturer:' | grep -v 'No Module Installed' || echo 'No info'"
+      register: ram_detallada
+
+    - name: Extraer info de la BIOS y Sistema
+      ansible.builtin.shell: "dmidecode -t system,bios | grep -E 'Vendor:|Version:|Release Date:|Product Name:|Serial Number:' | xargs"
+      register: bios_system
+
+    - name: Listado de Discos Físicos (JSON format)
+      ansible.builtin.shell: "lsblk -J -o NAME,SIZE,MODEL,SERIAL,TYPE | grep -v 'loop'"
+      register: discos_json
+
+    - name: Generar Super JSON de Hardware
+      ansible.builtin.copy:
+        dest: "{{ ruta_json_remoto }}"
+        content: |
+          {
+            "identificacion": {
+              "ip": "{{ inventory_hostname }}",
+              "hostname": "{{ ansible_hostname }}",
+              "fqdn": "{{ ansible_fqdn }}",
+              "sistema_operativo": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
+              "kernel": "{{ ansible_kernel }}"
+            },
+            "chasis_bios": {
+              "fabricante": "{{ ansible_system_vendor }}",
+              "modelo": "{{ ansible_product_name }}",
+              "num_serie": "{{ ansible_product_serial }}",
+              "bios_version": "{{ ansible_bios_version }}",
+              "raw_system": "{{ bios_system.stdout }}"
+            },
+            "procesador": {
+              "modelo": "{{ ansible_processor[2] if ansible_processor|length > 2 else ansible_processor[0] }}",
+              "arquitectura": "{{ ansible_architecture }}",
+              "cpus_fisicas": {{ ansible_processor_count }},
+              "cores_totales": {{ ansible_processor_vcpus }},
+              "hilos_por_core": {{ ansible_processor_threads_per_core | default(1) }}
+            },
+            "memoria_ram": {
+                "total_gb": {{ (ansible_memtotal_mb / 1024) | round(2) }},
+                "slots_detalle": {{ ram_detallada.stdout_lines | to_json }}
+            },
+            "almacenamiento": {{ discos_json.stdout | default('{}') }},
+            "red": {
+                "interfaces": "{{ ansible_interfaces | join(', ') }}",
+                "mac_principal": "{{ ansible_default_ipv4.mac | default('N/A') }}"
+            }
+          }
+
+    - name: Traer reporte al nodo de control
+      ansible.builtin.fetch:
+        src: "{{ ruta_json_remoto }}"
+        dest: "{{ ruta_json_ctl }}/"
+        flat: true
+
+########################################################################
+# LOCALHOST: GENERACIÓN DE EXCEL AVANZADO
+########################################################################
+- name: Generar Reporte Hardware Excel
+  hosts: localhost
+  gather_facts: no
+  vars:
+    ruta_json_ctl: "/home/semaphore/Excels"
+    ruta_excel:    "/home/semaphore/Excels/Inventario_Hardware_Completo.xlsx"
+    script_python: "/home/semaphore/Excels/generar_hw_excel.py"
+
+  tasks:
+    - name: Crear Script Python de Procesamiento
+      ansible.builtin.copy:
+        dest: "{{ script_python }}"
+        mode: "0755"
+        content: |
+          #!/usr/bin/env python3
+          import sys, os, json, glob
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+          def run():
+              excel_path, json_dir = sys.argv[1], sys.argv[2]
+              json_files = glob.glob(os.path.join(json_dir, "hw_full_*.json"))
+              wb = Workbook(); ws = wb.active; ws.title = "Inventario Hardware"
+
+              # Estilos
+              head_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+              white_font = Font(color="FFFFFF", bold=True)
+              center_ali = Alignment(horizontal="center", vertical="center")
+              border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+
+              headers = [
+                  "HOSTNAME", "IP", "S.O.", "FABRICANTE", "MODELO", "Nº SERIE", 
+                  "CPU MODELO", "CORES", "RAM TOTAL (GB)", "DETALLE SLOTS RAM", "DISCOS", "MAC"
+              ]
+              ws.append(headers)
+              for cell in ws[1]:
+                  cell.fill, cell.font, cell.alignment = head_fill, white_font, center_ali
+
+              for f_path in sorted(json_files):
+                  with open(f_path, 'r') as f:
+                      try:
+                          data = json.load(f)
+                      except: continue
+                  
+                  # Procesar Discos (convertir JSON de lsblk a string legible)
+                  disks_raw = data.get('almacenamiento', {}).get('blockdevices', [])
+                  disks_str = " | ".join([f"{d['name']}:{d['size']} ({d.get('model','?')})" for d in disks_raw])
+                  
+                  # Procesar RAM Slots
+                  ram_slots = " / ".join(data.get('memoria_ram', {}).get('slots_detalle', []))
+
+                  row = [
+                      data['identificacion']['hostname'],
+                      data['identificacion']['ip'],
+                      data['identificacion']['sistema_operativo'],
+                      data['chasis_bios']['fabricante'],
+                      data['chasis_bios']['modelo'],
+                      data['chasis_bios']['num_serie'],
+                      data['procesador']['modelo'],
+                      data['procesador']['cores_totales'],
+                      data['memoria_ram']['total_gb'],
+                      ram_slots,
+                      disks_str,
+                      data['red']['mac_principal']
+                  ]
+                  ws.append(row)
+                  for cell in ws[ws.max_row]:
+                      cell.border = border
+                      cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+              # Ajustar anchos
+              for col in ws.columns:
+                  max_length = 0
+                  column = col[0].column_letter
+                  ws.column_dimensions[column].width = 25
+
+              wb.save(excel_path)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar generación de Excel
+      ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
