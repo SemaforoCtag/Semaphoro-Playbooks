@@ -21,7 +21,7 @@
       run_once: true
       become: false
 
-    - name: Limpiar JSON antiguos en el nodo de control
+    - name: Limpiar JSON antiguos (evita filas basura)
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -31,163 +31,30 @@
       loop: "{{ lookup('ansible.builtin.fileglob', ruta_json_ctl + '/info_*.json', wantlist=True) }}"
 
   tasks:
-    ####################################################################
-    # 1A) Escaneo de PUERTOS DB
-    ####################################################################
-    - name: Verificar MySQL (3306)
+    - name: Escaneo de Puertos Base de Datos
       ansible.builtin.wait_for:
         host: "{{ inventory_hostname }}"
-        port: 3306
-        timeout: 4
-      register: mysql_port
-      ignore_errors: true
+        port: "{{ item }}"
+        timeout: 2
+      register: db_ports
+      ignore_errors: yes
+      loop: [3306, 5432, 1433, 1521, 27017]
 
-    - name: Verificar PostgreSQL (5432)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 5432
-        timeout: 4
-      register: postgres_port
-      ignore_errors: true
-
-    - name: Verificar SQL Server (1433)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 1433
-        timeout: 4
-      register: sqlserver_port
-      ignore_errors: true
-
-    - name: Verificar Oracle (1521)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 1521
-        timeout: 4
-      register: oracle_port
-      ignore_errors: true
-
-    - name: Verificar MongoDB (27017)
-      ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
-        port: 27017
-        timeout: 4
-      register: mongodb_port
-      ignore_errors: true
-
-    - name: Consolidar resultado de puertos DB
-      ansible.builtin.set_fact:
-        puertos_db:
-          mysql:      "{{ mysql_port.elapsed     is defined and mysql_port.elapsed     < 3 }}"
-          postgresql: "{{ postgres_port.elapsed  is defined and postgres_port.elapsed  < 3 }}"
-          sqlserver:  "{{ sqlserver_port.elapsed is defined and sqlserver_port.elapsed < 3 }}"
-          oracle:     "{{ oracle_port.elapsed    is defined and oracle_port.elapsed    < 3 }}"
-          mongodb:    "{{ mongodb_port.elapsed   is defined and mongodb_port.elapsed   < 3 }}"
-
-    ####################################################################
-    # 1B) Puertos TCP/UDP en escucha
-    ####################################################################
-    - name: Obtener puertos TCP/UDP en escucha (ss)
+    - name: Obtener puertos TCP/UDP
       ansible.builtin.shell: |
         ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
       register: listening_ports_cmd
       changed_when: false
-      failed_when: false
 
-    - name: Definir lista de puertos en escucha
-      ansible.builtin.set_fact:
-        listening_ports: "{{ listening_ports_cmd.stdout_lines | default([]) }}"
-
-    ####################################################################
-    # 1C) Usuarios
-    ####################################################################
-    - name: Obtener usuarios del sistema
+    - name: Obtener modelo CPU
       ansible.builtin.shell: |
-        getent passwd | awk -F: '{print $1 ":" $3 ":" $4 ":" $7}'
-      register: usuarios
+        grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//'
+      register: cpu_model_detailed
       changed_when: false
 
-    ####################################################################
-    # 1D) Guardar JSON válido
-    ####################################################################
-    - name: Guardar facts + puertos en JSON
-      ansible.builtin.copy:
-        dest: "{{ ruta_json_remoto }}"
-        force: true
-        content: |
-          {
-            "ip": "{{ inventory_hostname }}",
-            "hostname": "{{ ansible_hostname }}",
-            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
-            "fecha": "{{ ansible_date_time.iso8601 }}",
-            "cpu_modelo": "{{ ansible_processor[1] }} ({{ ansible_processor_vcpus }} vCPU)",
-            "ram_total_mb": {{ ansible_memtotal_mb }},
-            "ram_uso_mb": {{ ansible_memtotal_mb - ansible_memfree_mb }},
-            "puertos_db": {{ puertos_db | to_json }},
-            "listening_ports": {{ listening_ports | to_json }},
-            "usuarios": {{ usuarios.stdout_lines | to_json }}
-          }
+    - name: Obtener usuarios
+      ansible.builtin.shell: |
+        getent passwd | cut -d: -f1 | while read u; do echo "$u:$(id -Gn $u | tr ' ' ',')"; done
+      register: lista_usuarios_detallada
+      changed_when: false
 
-    - name: Traer JSON al nodo de control
-      ansible.builtin.fetch:
-        src: "{{ ruta_json_remoto }}"
-        dest: "{{ ruta_json_ctl }}/"
-        flat: true
-
-########################################################################
-# 2. localhost: Generar / actualizar Excel
-########################################################################
-- name: Añadir información al Excel
-  hosts: localhost
-  gather_facts: no
-
-  vars:
-    ruta_json_ctl: "/home/semaphore/Excels"
-    script_python: "/home/semaphore/Excels/append_excel.py"
-    ruta_excel: "/home/semaphore/Excels/Inventario_Equipos_DMZ.xlsx"
-
-  tasks:
-    - name: Buscar JSON generados
-      ansible.builtin.find:
-        paths: "{{ ruta_json_ctl }}"
-        patterns: "info_*.json"
-        file_type: file
-      register: json_files
-
-    - name: Ejecutar script Python (1 JSON = 1 fila)
-      ansible.builtin.command: >
-        python3 {{ script_python }} {{ ruta_excel }} {{ item.path }}
-      loop: "{{ json_files.files }}"
-
-########################################################################
-# 3. Copia al share ya montado
-########################################################################
-- name: Copiar inventario al recurso compartido
-  hosts: localhost
-  gather_facts: no
-
-  vars:
-    mountpoint: "/mnt/ansible_share"
-    excel_file: "Inventario_Equipos_DMZ.xlsx"
-
-  tasks:
-    - name: Verificar que el recurso está montado
-      ansible.builtin.stat:
-        path: "{{ mountpoint }}"
-      register: mount_status
-
-    - name: Fallar si no está montado
-      ansible.builtin.fail:
-        msg: "❌ El recurso {{ mountpoint }} no está montado."
-      when: not mount_status.stat.exists
-
-    - name: Copiar Excel al recurso compartido
-      become: true
-      ansible.builtin.copy:
-        src: "/home/semaphore/Excels/{{ excel_file }}"
-        dest: "{{ mountpoint }}/{{ excel_file }}"
-        mode: "0644"
-        remote_src: true
-
-    - name: ✅ Mensaje final
-      ansible.builtin.debug:
-        msg: "✅ Inventario actualizado y copiado correctamente"
