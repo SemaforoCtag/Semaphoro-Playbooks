@@ -13,7 +13,7 @@
 
   pre_tasks:
     - name: Crear carpeta local para los JSON
-      ansible.builtin.file:
+      file:
         path: "{{ ruta_json_ctl }}"
         state: directory
         mode: "0755"
@@ -21,40 +21,73 @@
       run_once: true
       become: false
 
-    - name: Limpiar JSON antiguos (evita filas basura)
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      delegate_to: localhost
-      run_once: true
-      become: false
-      loop: "{{ lookup('ansible.builtin.fileglob', ruta_json_ctl + '/info_*.json', wantlist=True) }}"
-
   tasks:
-    - name: Escaneo de Puertos Base de Datos
-      ansible.builtin.wait_for:
+    - name: Verificar MySQL (3306)
+      wait_for:
         host: "{{ inventory_hostname }}"
-        port: "{{ item }}"
-        timeout: 2
-      register: db_ports
+        port: 3306
+        timeout: 4
+      register: mysql_port
       ignore_errors: yes
-      loop: [3306, 5432, 1433, 1521, 27017]
 
-    - name: Obtener puertos TCP/UDP
-      ansible.builtin.shell: |
-        ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
+    - name: Verificar PostgreSQL (5432)
+      wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 5432
+        timeout: 4
+      register: postgres_port
+      ignore_errors: yes
+
+    - name: Verificar SQL Server (1433)
+      wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 1433
+        timeout: 4
+      register: sqlserver_port
+      ignore_errors: yes
+
+    - name: Verificar Oracle (1521)
+      wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 1521
+        timeout: 4
+      register: oracle_port
+      ignore_errors: yes
+
+    - name: Verificar MongoDB (27017)
+      wait_for:
+        host: "{{ inventory_hostname }}"
+        port: 27017
+        timeout: 4
+      register: mongodb_port
+      ignore_errors: yes
+
+    - name: Consolidar resultado de puertos DB
+      set_fact:
+        puertos_db:
+          mysql:      "{{ mysql_port.elapsed is defined and mysql_port.elapsed < 3 }}"
+          postgresql: "{{ postgres_port.elapsed is defined and postgres_port.elapsed < 3 }}"
+          sqlserver:  "{{ sqlserver_port.elapsed is defined and sqlserver_port.elapsed < 3 }}"
+          oracle:     "{{ oracle_port.elapsed is defined and oracle_port.elapsed < 3 }}"
+          mongodb:    "{{ mongodb_port.elapsed is defined and mongodb_port.elapsed < 3 }}"
+
+    - name: Obtener puertos TCP/UDP en escucha
+      shell: ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq
       register: listening_ports_cmd
       changed_when: false
-
-    - name: Obtener modelo CPU
-      ansible.builtin.shell: |
-        grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//'
-      register: cpu_model_detailed
-      changed_when: false
+      failed_when: false
 
     - name: Obtener usuarios
-      ansible.builtin.shell: |
-        getent passwd | cut -d: -f1 | while read u; do echo "$u:$(id -Gn $u | tr ' ' ',')"; done
-      register: lista_usuarios_detallada
+      shell: getent passwd | awk -F: '{print $1 ":" $3 ":" $4 ":" $7}'
+      register: usuarios
       changed_when: false
 
+    - name: Guardar facts + puertos en JSON
+      copy:
+        dest: "{{ ruta_json_remoto }}"
+        force: yes
+        content: |
+          {
+            "inventory_hostname": "{{ inventory_hostname }}",
+            "hostname": "{{ ansible_hostname }}",
+            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
