@@ -29,10 +29,10 @@
         dest: "{{ ruta_nuevo_inventario }}"
         content: |
           ---
-          # Inventario generado automáticamente el {{ lookup('pipe', 'date +%Y-%m-%d %H:%M') }}
+          # Inventario generado automáticamente el {{ ansible_date_time.iso8601 }}
           all:
             children:
-              descubiertos:
+              semaforos:
                 hosts:
           {% for ip in hosts_encontrados.stdout_lines %}
                   host_{{ ip | replace('.', '_') }}:
