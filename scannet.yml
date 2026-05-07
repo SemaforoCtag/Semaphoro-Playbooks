@@ -19,9 +19,12 @@
         name: nmap
         state: present
 
-    - name: Escaneo masivo de rangos (Buscando SSH puerto 22)
+   - name: Escaneo masivo de rangos
       ansible.builtin.shell: |
-        nmap -pn -p 45500 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{print $2}' | sort -u
+        # -Pn: No hacer ping (asumir que el host está vivo)
+        # -p 22: Buscar el puerto SSH
+        # --open: Mostrar solo los que respondan
+        nmap -Pn -p 22 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{print $2}' | sort -u
       register: hosts_encontrados
 
     - name: Generar Inventario YAML Estático
