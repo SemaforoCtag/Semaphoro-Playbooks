@@ -1,5 +1,5 @@
 ---
-- name: Descubrimiento de Red con Reporte en Excel y Clasificación
+- name: Descubrimiento de Red con Reporte en Excel Dinámico
   hosts: localhost
   gather_facts: no
   become: yes
@@ -24,9 +24,10 @@
         state: directory
         mode: '0755'
 
-    - name: Escaneo masivo de rangos
+    - name: Escaneo masivo de rangos (Optimizado con -Pn)
       ansible.builtin.shell: |
-        nmap -sn -R {{ redes_a_escanear | join(' ') }} | grep "Nmap scan report for" | awk '{
+        # Añadimos -Pn para asegurar que encuentre hosts aunque bloqueen ping
+        nmap -sn -Pn -R {{ redes_a_escanear | join(' ') }} | grep "Nmap scan report for" | awk '{
           if (NF==6) 
             print $5 ";" $6
           else 
@@ -39,7 +40,7 @@
         dest: "{{ ruta_json_temp }}"
         content: "{{ hosts_encontrados.stdout_lines | to_json }}"
 
-    - name: Crear Script Python para generar Excel Ordenado
+    - name: Crear Script Python Dinámico
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -49,14 +50,17 @@
           from openpyxl import Workbook
           from openpyxl.styles import Font, PatternFill, Alignment
 
-          def obtener_rango(ip):
-              if ip.startswith("10.49.1."): return "Rango 10.49.1.x"
-              if ip.startswith("10.49.3."): return "Rango 10.49.3.x"
-              if ip.startswith("10.57.3."): return "Rango 10.57.3.x"
-              return "Otros"
+          def obtener_rango_dinamico(ip):
+              # Extrae los primeros 3 octetos: "10.50.3.14" -> "Rango 10.50.3.x"
+              partes = ip.split('.')
+              if len(partes) == 4:
+                  return f"Rango {partes[0]}.{partes[1]}.{partes[2]}.x"
+              return "Formato IP Inválido"
 
           def run():
               json_path, excel_path = sys.argv[1], sys.argv[2]
+              if not os.path.exists(json_path): return
+              
               with open(json_path, 'r') as f:
                   raw_hosts = json.load(f)
 
@@ -64,30 +68,34 @@
               ws = wb.active
               ws.title = "Hosts Descubiertos"
 
-              # Cabeceras y Estilo
               headers = ["RANGO", "HOSTNAME / DNS", "IP"]
               ws.append(headers)
+              
+              header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
               for cell in ws[1]:
                   cell.font = Font(bold=True, color="FFFFFF")
-                  cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+                  cell.fill = header_fill
 
-              # Procesar y Ordenar (por rango y luego por IP)
               data_rows = []
               for item in raw_hosts:
+                  if ';' not in item: continue
                   name, ip = item.split(';')
-                  data_rows.append([obtener_rango(ip), name, ip])
+                  # Si el nombre es igual a la IP, limpiar para que no se repita
+                  display_name = name if name != ip else "Sin DNS"
+                  data_rows.append([obtener_rango_dinamico(ip), display_name, ip])
               
-              # Ordenar por la primera columna (Rango) y la tercera (IP)
-              data_rows.sort(key=lambda x: (x[0], x[2]))
+              # Ordenar por Rango y luego por el cuarto octeto de la IP numéricamente
+              try:
+                  data_rows.sort(key=lambda x: (x[0], int(x[2].split('.')[-1])))
+              except:
+                  data_rows.sort()
 
               for row in data_rows:
                   ws.append(row)
 
-              # Ajustar columnas
               ws.column_dimensions['A'].width = 25
               ws.column_dimensions['B'].width = 40
               ws.column_dimensions['C'].width = 20
-
               wb.save(excel_path)
 
           if __name__ == "__main__":
@@ -103,7 +111,3 @@
         mode: "0666"
         remote_src: true
       ignore_errors: yes
-
-    - name: Mostrar resultado final
-      ansible.builtin.debug:
-        msg: "El reporte Excel ha sido generado y copiado a /mnt/ansible_share/"
