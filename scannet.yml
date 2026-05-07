@@ -12,6 +12,7 @@
       - "10.50.3.0/24"
       - "10.56.12.0/24"
       - "10.57.2.0/24"
+      
     ruta_json_temp: "/tmp/hosts_descubiertos.json"
     ruta_excel: "/home/semaphore/Excels/Reporte_Descubrimiento_Red.xlsx"
     script_python: "/home/semaphore/Excels/generar_descubrimiento_excel.py"
