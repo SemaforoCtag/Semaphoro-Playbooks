@@ -5,13 +5,11 @@
   become: yes
 
   vars:
-    # Añade aquí todos los rangos que necesites
     redes_a_escanear:
       - "10.49.1.0/24"
       - "10.49.3.0/24"
       - "10.57.3.0/24"
-    
-    ruta_nuevo_inventario: "/home/semaphore/Excels/inventario_multirango.yml"
+    ruta_nuevo_inventario: "/home/semaphore/scannet.yml"
 
   tasks:
     - name: Asegurar que nmap está instalado
@@ -19,11 +17,8 @@
         name: nmap
         state: present
 
-   - name: Escaneo masivo de rangos
+    - name: Escaneo masivo de rangos (Modo Agresivo)
       ansible.builtin.shell: |
-        # -Pn: No hacer ping (asumir que el host está vivo)
-        # -p 22: Buscar el puerto SSH
-        # --open: Mostrar solo los que respondan
         nmap -Pn -p 22 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{print $2}' | sort -u
       register: hosts_encontrados
 
@@ -32,7 +27,6 @@
         dest: "{{ ruta_nuevo_inventario }}"
         content: |
           ---
-          # Inventario generado automaticamente
           all:
             children:
               semaforos:
@@ -49,9 +43,7 @@
       ansible.builtin.debug:
         msg: 
           - "Escaneo completado."
-          - "Rangos analizados: {{ redes_a_escanear | join(', ') }}"
           - "Total hosts vivos con SSH: {{ hosts_encontrados.stdout_lines | length }}"
-          - "Archivo creado: {{ ruta_nuevo_inventario }}"
 
     - name: Validar sintaxis del nuevo inventario
       ansible.builtin.command: "ansible-inventory -i {{ ruta_nuevo_inventario }} --list"
