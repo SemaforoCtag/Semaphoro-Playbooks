@@ -1,4 +1,3 @@
----
 - name: Escaneo de Seguridad Detallado (Versiones de Paquetes)
   hosts: semaforos
   gather_facts: yes
@@ -8,39 +7,42 @@
     ruta_json_ctl: "/home/semaphore/Excels"
 
   tasks:
+    # --- Limpieza previa en el servidor destino ---
+    - name: Eliminar JSON antiguo en el host
+      ansible.builtin.file:
+        path: "/tmp/vuln_detailed_{{ inventory_hostname }}.json"
+        state: absent
+
     - name: (Debian/Ubuntu) Obtener versiones de seguridad
       ansible.builtin.shell: |
         apt-get update > /dev/null
-        # Extraemos todo de una vez para evitar bucles lentos
         apt-get --just-print upgrade | grep -i security | awk '{print $2}' | uniq | xargs -I {} sh -c '
           echo "{};$(dpkg-query -W -f="\${Version}" {});$(apt-cache policy {} | grep "Candidate:" | awk "{print \$2}")"
         '
       register: vulns_debian
       when: ansible_os_family == "Debian"
-      async: 300  # Permite que la tarea corra hasta 5 min
-      poll: 5     # Revisa el estado cada 5 seg
+      async: 300
+      poll: 5
 
-    - name: (RHEL/CentOS/Rocky) Obtener detalles de seguridad optimizado
+    - name: (RHEL/CentOS/Rocky) Obtener detalles de seguridad
       ansible.builtin.shell: |
-        # 1. Sacamos la lista de paquetes con updates de seguridad una sola vez
-        dnf check-update --security -q | grep -E '^\S+' | awk '{print $1}' > /tmp/pkgs_list.txt
-        
-        # 2. Procesamos la información localmente
-        while read pkg; do
-            # Quitamos la arquitectura si viene pegada (ej: .x86_64)
-            p_clean=$(echo $pkg | cut -d. -f1)
-            current=$(rpm -q --queryformat '%{VERSION}-%{RELEASE}' $p_clean)
-            candidate=$(dnf list updates $p_clean -q | grep "^$p_clean" | awk '{print $2}')
-            echo "$p_clean;$current;$candidate"
-        done < /tmp/pkgs_list.txt
+        dnf check-update --security -q | grep -E '^\S+' | awk '{print $1}' > /tmp/pkgs_list.txt || true
+        if [ -f /tmp/pkgs_list.txt ]; then
+          while read pkg; do
+              p_clean=$(echo $pkg | cut -d. -f1)
+              current=$(rpm -q --queryformat '%{VERSION}-%{RELEASE}' $p_clean)
+              candidate=$(dnf list updates $p_clean -q | grep "^$p_clean" | awk '{print $2}')
+              echo "$p_clean;$current;$candidate"
+          done < /tmp/pkgs_list.txt
+        fi
       register: vulns_rhel
       when: ansible_os_family == "RedHat"
       async: 400
       poll: 10
 
-    - name: Preparar lista enriquecida
+    - name: Preparar lista enriquecida (Solución al error de variables)
       ansible.builtin.set_fact:
-        lista_final: "{{ vulns_debian.stdout_lines if ansible_os_family == 'Debian' else (vulns_rhel.stdout_lines | default([])) }}"
+        lista_final: "{{ (vulns_debian.stdout_lines if ansible_os_family == 'Debian' else vulns_rhel.stdout_lines) | default([]) }}"
 
     - name: Generar JSON por Host
       ansible.builtin.copy:
@@ -60,7 +62,7 @@
         flat: true
 
 ########################################################################
-# GENERACIÓN DE EXCEL CON COMPARATIVA DE VERSIONES
+# GENERACIÓN DE EXCEL (Se ejecuta SOLO cuando terminan TODOS los hosts)
 ########################################################################
 - name: Generar Excel de Parches
   hosts: localhost
@@ -71,7 +73,11 @@
     script_python: "/home/semaphore/Excels/generar_vuln_v2.py"
 
   tasks:
-    - name: Crear Script Python V2 (Comparativo)
+    - name: Esperar a que todos los archivos JSON se hayan descargado
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Crear Script Python V2 (Soporte Multi-Host)
       ansible.builtin.copy:
         dest: "{{ script_python }}"
         mode: "0755"
@@ -79,20 +85,24 @@
           #!/usr/bin/env python3
           import sys, os, json, glob
           from openpyxl import Workbook
-          from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+          from openpyxl.styles import Font, PatternFill, Border, Side
 
           def run():
               excel_path, json_dir = sys.argv[1], sys.argv[2]
+              # Buscamos todos los archivos que empiecen por vuln_detailed_
               json_files = glob.glob(os.path.join(json_dir, "vuln_detailed_*.json"))
               
+              if not json_files:
+                  print("No se encontraron archivos JSON para procesar.")
+                  return
+
               wb = Workbook()
               ws = wb.active
               ws.title = "Plan de Parcheo"
               
-              headers = ["HOSTNAME", "IP", "PAQUETE", "VERSIÓN ACTUAL", "VERSIÓN SEGURIDAD (Update)"]
+              headers = ["HOSTNAME", "IP", "SISTEMA", "PAQUETE", "VERSIÓN ACTUAL", "VERSIÓN SEGURIDAD"]
               ws.append(headers)
               
-              # Estilos
               header_fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
               white_font = Font(color="FFFFFF", bold=True)
               border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
@@ -101,18 +111,26 @@
                   cell.fill, cell.font = header_fill, white_font
 
               for f_path in sorted(json_files):
-                  with open(f_path, 'r') as f:
-                      d = json.load(f)
-                  
-                  for item in d.get('parches', []):
-                      if ';' in item:
-                          nombre, actual, nueva = item.split(';')
-                          ws.append([d['hostname'], d['ip'], nombre, actual, nueva])
-                          for cell in ws[ws.max_row]:
-                              cell.border = border
+                  try:
+                      with open(f_path, 'r') as f:
+                          d = json.load(f)
+                      
+                      # Si no hay parches, añadir una fila indicando que está limpio
+                      if not d.get('parches'):
+                          ws.append([d['hostname'], d['ip'], d['os'], "SISTEMA ACTUALIZADO", "-", "-"])
+                      else:
+                          for item in d['parches']:
+                              if ';' in item:
+                                  nombre, actual, nueva = item.split(';')
+                                  ws.append([d['hostname'], d['ip'], d['os'], nombre, actual, nueva])
+                  except Exception as e:
+                      print(f"Error procesando {f_path}: {e}")
 
-              # Ajustar anchos
-              for col in ['A','B','C','D','E']:
+              for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
+                  for cell in row:
+                      cell.border = border
+
+              for col in ['A','B','C','D','E','F']:
                   ws.column_dimensions[col].width = 25
 
               wb.save(excel_path)
@@ -123,7 +141,7 @@
     - name: Ejecutar generación de Excel
       ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
 
-    - name: Exportar al Share (CON SUDO)
+    - name: Exportar al Share
       become: true
       ansible.builtin.copy:
         src: "{{ ruta_excel }}"
