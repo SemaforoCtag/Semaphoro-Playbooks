@@ -1,5 +1,5 @@
 ---
-- name: Descubrimiento Multirango y Generación de Inventario
+- name: Descubrimiento Multirango y Generación de Inventario con Hostnames
   hosts: localhost
   gather_facts: no
   become: yes
@@ -17,9 +17,16 @@
         name: nmap
         state: present
 
-    - name: Escaneo masivo de rangos (Modo Agresivo)
+    - name: Escaneo masivo de rangos (Obteniendo IPs y Hostnames)
       ansible.builtin.shell: |
-        nmap -Pn -p 22 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{print $2}' | sort -u
+        # -sn: Ping scan (rápido)
+        # -R: Forzar resolución DNS siempre
+        nmap -sn -R {{ redes_a_escanear | join(' ') }} | grep "Nmap scan report for" | awk '{
+          if (NF==6) 
+            print $5 ";" $6
+          else 
+            print $5 ";" $5
+        }' | tr -d '()'
       register: hosts_encontrados
 
     - name: Generar Inventario YAML Estático
@@ -31,9 +38,10 @@
             children:
               semaforos:
                 hosts:
-          {% for ip in hosts_encontrados.stdout_lines %}
-                  host_{{ ip | replace('.', '_') }}:
-                    ansible_host: {{ ip }}
+          {% for item in hosts_encontrados.stdout_lines %}
+          {% set parts = item.split(';') %}
+                  {{ parts[0] }}:
+                    ansible_host: {{ parts[1] }}
           {% endfor %}
             vars:
               ansible_user: semaphore
@@ -43,14 +51,17 @@
       ansible.builtin.debug:
         msg: 
           - "Escaneo completado."
-          - "Total hosts vivos con SSH: {{ hosts_encontrados.stdout_lines | length }}"
+          - "Total hosts vivos: {{ hosts_encontrados.stdout_lines | length }}"
 
     - name: Validar sintaxis del nuevo inventario
       ansible.builtin.command: "ansible-inventory -i {{ ruta_nuevo_inventario }} --list"
       register: inventory_test
       ignore_errors: yes
 
-    - name: Reportar si el inventario es válido
+    - name: Mostrar el contenido del inventario generado
+      ansible.builtin.command: "cat {{ ruta_nuevo_inventario }}"
+      register: inventario_final
+
+    - name: Imprimir inventario en consola
       ansible.builtin.debug:
-        msg: "El inventario generado es válido y está listo para usarse."
-      when: inventory_test.rc == 0
+        var: inventario_final.stdout_lines
