@@ -1,0 +1,61 @@
+---
+- name: Descubrimiento Multirango y Generación de Inventario
+  hosts: localhost
+  gather_facts: no
+  become: yes
+
+  vars:
+    # Añade aquí todos los rangos que necesites
+    redes_a_escanear:
+      - "10.49.1.0/24"
+      - "10.49.3.0/24"
+      - "10.57.3.0/24"
+    
+    ruta_nuevo_inventario: "/home/semaphore/Excels/inventario_multirango.yml"
+
+  tasks:
+    - name: Asegurar que nmap está instalado
+      ansible.builtin.package:
+        name: nmap
+        state: present
+
+    - name: Escaneo masivo de rangos (Buscando SSH puerto 22)
+      ansible.builtin.shell: |
+        nmap -pn -p 22 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{print $2}' | sort -u
+      register: hosts_encontrados
+
+    - name: Generar Inventario YAML Estático
+      ansible.builtin.copy:
+        dest: "{{ ruta_nuevo_inventario }}"
+        content: |
+          ---
+          # Inventario generado automáticamente el {{ lookup('pipe', 'date +%Y-%m-%d %H:%M') }}
+          all:
+            children:
+              descubiertos:
+                hosts:
+          {% for ip in hosts_encontrados.stdout_lines %}
+                  host_{{ ip | replace('.', '_') }}:
+                    ansible_host: {{ ip }}
+          {% endfor %}
+            vars:
+              ansible_user: semaphore
+              ansible_become: true
+
+    - name: Mostrar Resumen de Hallazgos
+      ansible.builtin.debug:
+        msg: 
+          - "Escaneo completado."
+          - "Rangos analizados: {{ redes_a_escanear | join(', ') }}"
+          - "Total hosts vivos con SSH: {{ hosts_encontrados.stdout_lines | length }}"
+          - "Archivo creado: {{ ruta_nuevo_inventario }}"
+
+    - name: Validar sintaxis del nuevo inventario
+      ansible.builtin.command: "ansible-inventory -i {{ ruta_nuevo_inventario }} --list"
+      register: inventory_test
+      ignore_errors: yes
+
+    - name: Reportar si el inventario es válido
+      ansible.builtin.debug:
+        msg: "El inventario generado es válido y está listo para usarse."
+      when: inventory_test.rc == 0
