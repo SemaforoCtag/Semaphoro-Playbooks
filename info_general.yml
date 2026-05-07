@@ -1,6 +1,20 @@
 ---
 ########################################################################
-# 1. Linux (semaforos): Recogida de datos completa + CPU Detallada     #
+# 1. Limpieza inicial en Localhost                                     #
+########################################################################
+- name: Preparar entorno de reporte
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Limpiar JSONs antiguos para evitar duplicados en el Excel
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      with_fileglob:
+        - "/home/semaphore/Excels/info_*.json"
+
+########################################################################
+# 2. Linux (semaforos): Recogida de datos                              #
 ########################################################################
 - name: Recoger facts y escanear puertos
   hosts: semaforos
@@ -14,18 +28,14 @@
   tasks:
     - name: Escaneo de Puertos Base de Datos
       ansible.builtin.wait_for:
-        host: "{{ inventory_hostname }}"
+        host: "127.0.0.1" # Escaneo local más fiable
         port: "{{ item }}"
         timeout: 1
       register: db_ports
       ignore_errors: yes
       loop: [3306, 5432, 1433, 1521, 27017]
 
-    - name: Obtener puertos TCP/UDP (ss)
-      ansible.builtin.shell: "ss -lntuH | awk '{print $5}' | awk -F':' '{print $NF}' | sort -n | uniq | xargs"
-      register: listening_ports_cmd
-
-    - name: Obtener nombre real de la CPU (Modelo detallado)
+    - name: Obtener nombre real de la CPU
       ansible.builtin.shell: "grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^[ \t]*//'"
       register: cpu_model_detailed
 
@@ -53,7 +63,6 @@
                "oracle": {{ 'true' if db_ports.results[3].failed is not defined or not db_ports.results[3].failed else 'false' }},
                "mongo": {{ 'true' if db_ports.results[4].failed is not defined or not db_ports.results[4].failed else 'false' }}
             },
-            "listening_ports": "{{ listening_ports_cmd.stdout }}",
             "usuarios_detallados": {{ lista_usuarios_detallada.stdout_lines | to_json }}
           }
 
@@ -64,7 +73,7 @@
         flat: true
 
 ########################################################################
-# 2. Localhost: Generar Excel con CPU Detallada                       #
+# 3. Localhost: Generar Excel                                          #
 ########################################################################
 - name: Generar Reporte Consolidado
   hosts: localhost
@@ -87,9 +96,10 @@
 
           def run():
               excel_path, json_dir = sys.argv[1], sys.argv[2]
+              # Solo leer archivos que empiecen con info_ y terminen en .json
               json_files = glob.glob(os.path.join(json_dir, "info_*.json"))
+              
               wb = Workbook(); ws = wb.active; ws.title = "Inventario DMZ"
-
               color_h = PatternFill(start_color="2C3E50", end_color="2C3E50", fill_type="solid")
               color_z = PatternFill(start_color="F2F4F4", end_color="F2F4F4", fill_type="solid")
               border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
@@ -100,29 +110,36 @@
                   cell.fill, cell.font, cell.alignment = color_h, Font(color="FFFFFF", bold=True), Alignment(horizontal="center")
 
               for f_path in sorted(json_files):
-                  with open(f_path, 'r') as f:
-                      d = json.load(f)
-                  pdb = d.get('puertos_db', {})
-                  ram_t = f"{round(d.get('ram_total_mb', 0)/1024, 2)} GB"
-                  ram_u = f"{round(d.get('ram_uso_mb', 0)/1024, 2)} GB"
-                  users_str = " | ".join(d.get('usuarios_detallados', []))
-                  
-                  row = [
-                      d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu_modelo'),
-                      ram_t, ram_u, d.get('fecha'),
-                      "SI" if pdb.get('mysql') else "-", "SI" if pdb.get('postgres') else "-",
-                      "SI" if pdb.get('sqlserver') else "-", "SI" if pdb.get('oracle') else "-",
-                      "SI" if pdb.get('mongo') else "-", users_str
-                  ]
-                  ws.append(row)
-                  curr = ws.max_row
-                  for cell in ws[curr]:
-                      cell.border = border
-                      cell.alignment = Alignment(horizontal="left", vertical="center")
-                      if ws.max_row % 2 == 0: cell.fill = color_z
+                  try:
+                      with open(f_path, 'r') as f:
+                          d = json.load(f)
+                      
+                      # Validación de datos mínimos para evitar filas vacías
+                      if not d.get('ip'): continue
+
+                      pdb = d.get('puertos_db', {})
+                      ram_t = f"{round(d.get('ram_total_mb', 0)/1024, 2)} GB"
+                      ram_u = f"{round(d.get('ram_uso_mb', 0)/1024, 2)} GB"
+                      users_str = " | ".join(d.get('usuarios_detallados', []))
+                      
+                      row = [
+                          d.get('ip'), d.get('hostname'), d.get('os'), d.get('cpu_modelo'),
+                          ram_t, ram_u, d.get('fecha'),
+                          "SI" if pdb.get('mysql') else "-", "SI" if pdb.get('postgres') else "-",
+                          "SI" if pdb.get('sqlserver') else "-", "SI" if pdb.get('oracle') else "-",
+                          "SI" if pdb.get('mongo') else "-", users_str
+                      ]
+                      ws.append(row)
+                      curr = ws.max_row
+                      for cell in ws[curr]:
+                          cell.border = border
+                          cell.alignment = Alignment(horizontal="left", vertical="center")
+                          if curr % 2 == 0: cell.fill = color_z
+                  except:
+                      continue
               
               for col in ['A','B','C','D','E','F','G','H','I','J','K','L']: ws.column_dimensions[col].width = 18
-              ws.column_dimensions['D'].width = 45 # Modelo CPU más ancho
+              ws.column_dimensions['D'].width = 45
               ws.column_dimensions['M'].width = 100 
               wb.save(excel_path)
 
@@ -132,12 +149,6 @@
     - name: Ejecutar script Python
       ansible.builtin.command: "python3 {{ script_python }} {{ ruta_excel }} {{ ruta_json_ctl }}"
 
-########################################################################
-# 3. Exportación Final                                                 #
-########################################################################
-- name: Copiar al Share
-  hosts: localhost
-  tasks:
     - name: Mover al recurso de red
       become: true
       ansible.builtin.copy:
@@ -145,3 +156,4 @@
         dest: "/mnt/ansible_share/Inventario_Equipos_DMZ.xlsx"
         mode: "0644"
         remote_src: true
+        
