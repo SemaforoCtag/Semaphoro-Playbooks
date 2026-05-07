@@ -21,7 +21,7 @@
 
     - name: Escaneo masivo de rangos (Buscando SSH puerto 22)
       ansible.builtin.shell: |
-        nmap -pn -p 22 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{print $2}' | sort -u
+        nmap -pn -p 45500 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{print $2}' | sort -u
       register: hosts_encontrados
 
     - name: Generar Inventario YAML Estático
