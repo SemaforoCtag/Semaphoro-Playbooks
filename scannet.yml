@@ -24,24 +24,21 @@
         state: directory
         mode: '0755'
 
-    - name: Escaneo de puertos SSH (Filtrado estricto)
+    - name: Escaneo de puertos SSH (Alto Rendimiento)
       ansible.builtin.shell: |
-        # -sT: Escaneo de conexión TCP (muy fiable para SSH)
-        # -Pn: No hace ping previo (escanea el puerto directamente)
-        # -p 22: Solo mira el puerto SSH
-        # --open: Reporta solo si el puerto está ABIERTO
-        nmap -sT -Pn -p 22 {{ redes_a_escanear | join(' ') }} --open -oG - | grep "Host:" | awk '{
+        # --min-parallelism 100: Obliga a nmap a lanzar 100 escaneos a la vez
+        # --stats-every 10s: Mantiene la conexión viva enviando progreso
+        nmap -sT -Pn -p 22 -T4 --min-parallelism 100 --open {{ redes_a_escanear | join(' ') }} -oG - | \
+        grep "Host:" | awk '{
           ip=$2;
           name=$3;
-          if (name == "()" || name == "") {
-            print ip ";" ip
-          } else {
-            # Limpiar paréntesis del nombre si existen
-            gsub(/[()]/, "", name);
-            print name ";" ip
-          }
+          gsub(/[()]/, "", name);
+          if (name == "") name=ip;
+          print name ";" ip
         }' | sort -u
       register: hosts_encontrados
+      async: 1200   # Subimos a 20 minutos por si acaso
+      poll: 15
 
     - name: Crear JSON temporal
       ansible.builtin.copy:
