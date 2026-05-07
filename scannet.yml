@@ -29,7 +29,7 @@
         dest: "{{ ruta_nuevo_inventario }}"
         content: |
           ---
-          # Inventario generado automáticamente el {{ ansible_date_time.iso8601 }}
+          # Inventario generado automaticamente
           all:
             children:
               semaforos:
