@@ -51,7 +51,7 @@
           {
             "ip": "{{ inventory_hostname }}",
             "hostname": "{{ ansible_hostname }}",
-            "os": "{{ ansible_os_family }} {{ ansible_distribution_version }}",
+            "os": "{{ ansible_distribution }} {{ ansible_distribution_version }}",
             "fecha": "{{ ansible_date_time.date }} {{ ansible_date_time.time }}",
             "cpu_modelo": "{{ cpu_model_detailed.stdout }} ({{ ansible_processor_vcpus }} vCPUs)",
             "ram_total_mb": {{ ansible_memtotal_mb }},
