@@ -1,5 +1,5 @@
 ---
-- name: Descubrimiento Multirango y Generación de Inventario con Hostnames
+- name: Descubrimiento de Red con Reporte en Excel y Clasificación
   hosts: localhost
   gather_facts: no
   become: yes
@@ -9,18 +9,19 @@
       - "10.49.1.0/24"
       - "10.49.3.0/24"
       - "10.57.3.0/24"
-    ruta_nuevo_inventario: "/home/semaphore/scannet.yml"
+    ruta_json_temp: "/tmp/hosts_descubiertos.json"
+    ruta_excel: "/home/semaphore/Excels/Reporte_Descubrimiento_Red.xlsx"
+    script_python: "/home/semaphore/Excels/generar_descubrimiento_excel.py"
 
   tasks:
-    - name: Asegurar que nmap está instalado
-      ansible.builtin.package:
-        name: nmap
-        state: present
+    - name: Asegurar directorios de trabajo
+      ansible.builtin.file:
+        path: "/home/semaphore/Excels"
+        state: directory
+        mode: '0755'
 
-    - name: Escaneo masivo de rangos (Obteniendo IPs y Hostnames)
+    - name: Escaneo masivo de rangos
       ansible.builtin.shell: |
-        # -sn: Ping scan (rápido)
-        # -R: Forzar resolución DNS siempre
         nmap -sn -R {{ redes_a_escanear | join(' ') }} | grep "Nmap scan report for" | awk '{
           if (NF==6) 
             print $5 ";" $6
@@ -29,39 +30,76 @@
         }' | tr -d '()'
       register: hosts_encontrados
 
-    - name: Generar Inventario YAML Estático
+    - name: Crear JSON temporal para el script de Python
       ansible.builtin.copy:
-        dest: "{{ ruta_nuevo_inventario }}"
+        dest: "{{ ruta_json_temp }}"
+        content: "{{ hosts_encontrados.stdout_lines | to_json }}"
+
+    - name: Crear Script Python para generar Excel Ordenado
+      ansible.builtin.copy:
+        dest: "{{ script_python }}"
+        mode: "0755"
         content: |
-          ---
-          all:
-            children:
-              semaforos:
-                hosts:
-          {% for item in hosts_encontrados.stdout_lines %}
-          {% set parts = item.split(';') %}
-                  {{ parts[0] }}:
-                    ansible_host: {{ parts[1] }}
-          {% endfor %}
-            vars:
-              ansible_user: semaphore
-              ansible_become: true
+          #!/usr/bin/env python3
+          import json, sys, os
+          from openpyxl import Workbook
+          from openpyxl.styles import Font, PatternFill, Alignment
 
-    - name: Mostrar Resumen de Hallazgos
-      ansible.builtin.debug:
-        msg: 
-          - "Escaneo completado."
-          - "Total hosts vivos: {{ hosts_encontrados.stdout_lines | length }}"
+          def obtener_rango(ip):
+              if ip.startswith("10.49.1."): return "Rango 10.49.1.x"
+              if ip.startswith("10.49.3."): return "Rango 10.49.3.x"
+              if ip.startswith("10.57.3."): return "Rango 10.57.3.x"
+              return "Otros"
 
-    - name: Validar sintaxis del nuevo inventario
-      ansible.builtin.command: "ansible-inventory -i {{ ruta_nuevo_inventario }} --list"
-      register: inventory_test
+          def run():
+              json_path, excel_path = sys.argv[1], sys.argv[2]
+              with open(json_path, 'r') as f:
+                  raw_hosts = json.load(f)
+
+              wb = Workbook()
+              ws = wb.active
+              ws.title = "Hosts Descubiertos"
+
+              # Cabeceras y Estilo
+              headers = ["RANGO", "HOSTNAME / DNS", "IP"]
+              ws.append(headers)
+              for cell in ws[1]:
+                  cell.font = Font(bold=True, color="FFFFFF")
+                  cell.fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+
+              # Procesar y Ordenar (por rango y luego por IP)
+              data_rows = []
+              for item in raw_hosts:
+                  name, ip = item.split(';')
+                  data_rows.append([obtener_rango(ip), name, ip])
+              
+              # Ordenar por la primera columna (Rango) y la tercera (IP)
+              data_rows.sort(key=lambda x: (x[0], x[2]))
+
+              for row in data_rows:
+                  ws.append(row)
+
+              # Ajustar columnas
+              ws.column_dimensions['A'].width = 25
+              ws.column_dimensions['B'].width = 40
+              ws.column_dimensions['C'].width = 20
+
+              wb.save(excel_path)
+
+          if __name__ == "__main__":
+              run()
+
+    - name: Ejecutar generación de Excel
+      ansible.builtin.command: "python3 {{ script_python }} {{ ruta_json_temp }} {{ ruta_excel }}"
+
+    - name: Exportar Reporte a la Ruta de Red
+      ansible.builtin.copy:
+        src: "{{ ruta_excel }}"
+        dest: "/mnt/ansible_share/Reporte_Descubrimiento_Red.xlsx"
+        mode: "0666"
+        remote_src: true
       ignore_errors: yes
 
-    - name: Mostrar el contenido del inventario generado
-      ansible.builtin.command: "cat {{ ruta_nuevo_inventario }}"
-      register: inventario_final
-
-    - name: Imprimir inventario en consola
+    - name: Mostrar resultado final
       ansible.builtin.debug:
-        var: inventario_final.stdout_lines
+        msg: "El reporte Excel ha sido generado y copiado a /mnt/ansible_share/"
