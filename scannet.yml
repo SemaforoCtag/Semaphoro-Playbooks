@@ -42,13 +42,14 @@
           def escanear_red(red):
               print(f"Escaneando {red}...")
               temp_xml = tempfile.mktemp(suffix=".xml")
-              # -sS: Escaneo SYN (requiere root, más fiable). -T4: Más rápido.
-              # Se guarda directamente a un fichero para evitar corrupción por warnings en stdout.
-              cmd = f"nmap -sS -Pn -p 22 -T4 --max-parallelism 20 {red} -oX {temp_xml} > /dev/null 2>&1"
-              subprocess.run(cmd, shell=True)
+              # -sT: Escaneo TCP Connect (más fiable a través de firewalls y VPNs).
+              # -T3: Velocidad normal (evita bloqueos que omiten rangos enteros).
+              cmd = f"nmap -sT -Pn -p 22 -T3 --max-parallelism 10 {red} -oX {temp_xml}"
+              resultado = subprocess.run(cmd, shell=True, capture_output=True, text=True)
               encontrados = []
               
               if not os.path.exists(temp_xml):
+                  print(f"[!] Error: No se pudo generar XML para {red}. Nmap devolvió:\n{resultado.stderr}")
                   return encontrados
 
               try:
@@ -71,7 +72,7 @@
 
                       # Si el puerto está abierto, extraemos la info
                       ip = ""
-                      mac = "Desconocida (Fuera de subred)"
+                      mac = "Oculta tras el Router (Capa 3)"
                       hostname = "Sin DNS"
                       
                       # Buscar IP y MAC
