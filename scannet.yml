@@ -31,7 +31,7 @@
         mode: "0755"
         content: |
           #!/usr/bin/env python3
-          import json, sys, os, subprocess
+          import json, sys, os, subprocess, xml.etree.ElementTree as ET
           from openpyxl import Workbook
           from openpyxl.styles import Font, PatternFill
 
@@ -41,24 +41,65 @@
 
           def escanear_red(red):
               print(f"Escaneando {red}...")
-              # -sT -Pn -p 22: Escaneo de conexión TCP al puerto 22 sin ping previo
-              # --max-parallelism 20: Velocidad moderada para evitar bloqueos de Firewall
-              cmd = f"nmap -sT -Pn -p 22 --open --max-parallelism 20 {red} -oG -"
+              # -sT -Pn -p 22: Escaneo de conexión TCP al puerto 22 sin ping previo.
+              # --max-parallelism 20: Velocidad moderada para evitar bloqueos de Firewall.
+              # -oX -: Salida en formato XML a stdout.
+              cmd = f"nmap -sT -Pn -p 22 --max-parallelism 20 {red} -oX -"
               res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
               encontrados = []
-              for line in res.stdout.splitlines():
-                  if "Host:" in line:
-                      partes = line.split()
-                      ip = partes[1]
-                      name = partes[2].replace('(', '').replace(')', '')
-                      display_name = name if name != "" and name != ip else "Sin DNS"
-                      encontrados.append([obtener_rango(ip), display_name, ip])
+              
+              if not res.stdout.strip():
+                  return encontrados
+
+              try:
+                  root = ET.fromstring(res.stdout)
+                  for host in root.findall('host'):
+                      # Verificar si el puerto 22 está abierto
+                      port_open = False
+                      ports = host.find('ports')
+                      if ports is not None:
+                          for port in ports.findall('port'):
+                              if port.get('portid') == '22':
+                                  state = port.find('state')
+                                  if state is not None and state.get('state') == 'open':
+                                      port_open = True
+                                      break
+                      
+                      if not port_open:
+                          continue
+
+                      # Si el puerto está abierto, extraemos la info
+                      ip = ""
+                      mac = "No encontrada"
+                      hostname = "Sin DNS"
+                      
+                      # Buscar IP y MAC
+                      for address in host.findall('address'):
+                          if address.get('addrtype') == 'ipv4':
+                              ip = address.get('addr')
+                          elif address.get('addrtype') == 'mac':
+                              mac = address.get('addr')
+
+                      if not ip:
+                          continue
+
+                      # Buscar Hostname
+                      hostnames = host.find('hostnames')
+                      if hostnames is not None:
+                          hostname_elem = hostnames.find('hostname')
+                          if hostname_elem is not None and hostname_elem.get('name'):
+                              hostname = hostname_elem.get('name')
+                      
+                      encontrados.append([obtener_rango(ip), hostname, ip, mac])
+              except ET.ParseError as e:
+                  print(f"Error al parsear XML de nmap para la red {red}: {e}")
+
               return encontrados
 
           def run():
               redes = {{ redes_a_escanear | to_json }}
               excel_path = "{{ ruta_excel }}"
-              
+
               todos_los_hosts = []
               for red in redes:
                   todos_los_hosts.extend(escanear_red(red))
@@ -66,9 +107,9 @@
               wb = Workbook()
               ws = wb.active
               ws.title = "Inventario SSH"
-              
+
               # Estilo de cabecera
-              ws.append(["RANGO", "HOSTNAME", "IP"])
+              ws.append(["RANGO", "HOSTNAME", "IP", "MAC"])
               header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
               for cell in ws[1]:
                   cell.font = Font(bold=True, color="FFFFFF")
@@ -83,7 +124,8 @@
               ws.column_dimensions['A'].width = 25
               ws.column_dimensions['B'].width = 35
               ws.column_dimensions['C'].width = 20
-              
+              ws.column_dimensions['D'].width = 20
+
               wb.save(excel_path)
               print(f"Proceso finalizado. Total hosts: {len(todos_los_hosts)}")
 
