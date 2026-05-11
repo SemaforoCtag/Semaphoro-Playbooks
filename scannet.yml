@@ -31,7 +31,7 @@
         mode: "0755"
         content: |
           #!/usr/bin/env python3
-          import json, sys, os, subprocess, xml.etree.ElementTree as ET
+          import json, sys, os, subprocess, xml.etree.ElementTree as ET, tempfile
           from openpyxl import Workbook
           from openpyxl.styles import Font, PatternFill
 
@@ -41,18 +41,19 @@
 
           def escanear_red(red):
               print(f"Escaneando {red}...")
-              # -sT -Pn -p 22: Escaneo de conexión TCP al puerto 22 sin ping previo.
-              # --max-parallelism 20: Velocidad moderada para evitar bloqueos de Firewall.
-              # -oX -: Salida en formato XML a stdout.
-              cmd = f"nmap -sT -Pn -p 22 --max-parallelism 20 {red} -oX -"
-              res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+              temp_xml = tempfile.mktemp(suffix=".xml")
+              # -sS: Escaneo SYN (requiere root, más fiable). -T4: Más rápido.
+              # Se guarda directamente a un fichero para evitar corrupción por warnings en stdout.
+              cmd = f"nmap -sS -Pn -p 22 -T4 --max-parallelism 20 {red} -oX {temp_xml} > /dev/null 2>&1"
+              subprocess.run(cmd, shell=True)
               encontrados = []
               
-              if not res.stdout.strip():
+              if not os.path.exists(temp_xml):
                   return encontrados
 
               try:
-                  root = ET.fromstring(res.stdout)
+                  tree = ET.parse(temp_xml)
+                  root = tree.getroot()
                   for host in root.findall('host'):
                       # Verificar si el puerto 22 está abierto
                       port_open = False
@@ -70,7 +71,7 @@
 
                       # Si el puerto está abierto, extraemos la info
                       ip = ""
-                      mac = "No encontrada"
+                      mac = "Desconocida (Fuera de subred)"
                       hostname = "Sin DNS"
                       
                       # Buscar IP y MAC
@@ -93,6 +94,9 @@
                       encontrados.append([obtener_rango(ip), hostname, ip, mac])
               except ET.ParseError as e:
                   print(f"Error al parsear XML de nmap para la red {red}: {e}")
+              finally:
+                  if os.path.exists(temp_xml):
+                      os.remove(temp_xml)
 
               return encontrados
 
