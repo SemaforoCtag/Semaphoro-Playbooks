@@ -10,7 +10,7 @@
       - "10.49.1.0/24"
       - "10.49.3.0/24"
       - "10.57.3.0/24"
-      - "10.2.3.0/24"
+      - "10.57.1.0/24"
     
       
     ruta_excel: "/home/semaphore/Excels/Reporte_Final_SSH.xlsx"
