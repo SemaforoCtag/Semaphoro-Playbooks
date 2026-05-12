@@ -38,14 +38,38 @@
               partes = ip.split('.')
               return f"Rango {partes[0]}.{partes[1]}.{partes[2]}.x" if len(partes) == 4 else "IP Inválida"
 
-          def escanear_red(red):
+         def escanear_red(red):
               print(f"Escaneando {red}...")
-              temp_xml = tempfile.mktemp(suffix=".xml")
-              # -sT: Escaneo TCP Connect (más fiable a través de firewalls y VPNs).
-              # -T3: Velocidad normal (evita bloqueos que omiten rangos enteros).
-              cmd = f"nmap -sT -Pn -p 22 -T3 --max-parallelism 10 {red} -oX {temp_xml}"
+              # Usamos un nombre de archivo fijo por red para evitar líos de tempfile
+              nombre_fichero = f"/tmp/scan_{red.replace('/', '_')}.xml"
+              
+              # T4 es más agresivo, --min-parallelism acelera el proceso
+              cmd = f"nmap -Pn -p 22 --open -T4 --min-parallelism 20 {red} -oX {nombre_fichero}"
+              
               resultado = subprocess.run(cmd, shell=True, capture_output=True, text=True)
               encontrados = []
+
+              if not os.path.exists(nombre_fichero):
+                  # Esto saldrá en el stdout de Ansible si usas register/debug
+                  print(f"DEBUG: Archivo no creado para {red}. Error Nmap: {resultado.stderr}")
+                  return encontrados
+
+              try:
+                  tree = ET.parse(nombre_fichero)
+                  root = tree.getroot()
+                  for host in root.findall('host'):
+                      # Si Nmap detectó el host y el puerto 22, lo procesamos
+                      ip = ""
+                      for addr in host.findall('address'):
+                          if addr.get('addrtype') == 'ipv4':
+                              ip = addr.get('addr')
+                      
+                      if ip:
+                          encontrados.append([obtener_rango(ip), "Validando...", ip, "Ver reporte"])
+              except Exception as e:
+                  print(f"Error parseando {red}: {e}")
+              
+              return encontrados
               
               if not os.path.exists(temp_xml):
                   print(f"[!] Error: No se pudo generar XML para {red}. Nmap devolvió:\n{resultado.stderr}")
