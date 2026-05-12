@@ -11,7 +11,6 @@
       - "10.49.3.0/24"
       - "10.57.3.0/24"
       - "10.57.1.0/24"
-    
       
     ruta_excel: "/home/semaphore/Excels/Reporte_Final_SSH.xlsx"
     ruta_share: "/mnt/ansible_share/Reporte_Final_SSH.xlsx"
@@ -38,64 +37,26 @@
               partes = ip.split('.')
               return f"Rango {partes[0]}.{partes[1]}.{partes[2]}.x" if len(partes) == 4 else "IP Inválida"
 
-         def escanear_red(red):
+          def escanear_red(red):
               print(f"Escaneando {red}...")
-              # Usamos un nombre de archivo fijo por red para evitar líos de tempfile
-              nombre_fichero = f"/tmp/scan_{red.replace('/', '_')}.xml"
+              # Usamos un nombre de archivo temporal basado en la red para evitar colisiones
+              fd, temp_xml = tempfile.mkstemp(suffix=".xml")
+              os.close(fd)
               
-              # T4 es más agresivo, --min-parallelism acelera el proceso
-              cmd = f"nmap -Pn -p 22 --open -T4 --min-parallelism 20 {red} -oX {nombre_fichero}"
-              
+              # T4 y min-parallelism 20 para acelerar sin perder fiabilidad
+              cmd = f"nmap -sT -Pn -p 22 --open -T4 --min-parallelism 20 {red} -oX {temp_xml}"
               resultado = subprocess.run(cmd, shell=True, capture_output=True, text=True)
               encontrados = []
-
-              if not os.path.exists(nombre_fichero):
-                  # Esto saldrá en el stdout de Ansible si usas register/debug
-                  print(f"DEBUG: Archivo no creado para {red}. Error Nmap: {resultado.stderr}")
-                  return encontrados
-
-              try:
-                  tree = ET.parse(nombre_fichero)
-                  root = tree.getroot()
-                  for host in root.findall('host'):
-                      # Si Nmap detectó el host y el puerto 22, lo procesamos
-                      ip = ""
-                      for addr in host.findall('address'):
-                          if addr.get('addrtype') == 'ipv4':
-                              ip = addr.get('addr')
-                      
-                      if ip:
-                          encontrados.append([obtener_rango(ip), "Validando...", ip, "Ver reporte"])
-              except Exception as e:
-                  print(f"Error parseando {red}: {e}")
               
-              return encontrados
-              
-              if not os.path.exists(temp_xml):
-                  print(f"[!] Error: No se pudo generar XML para {red}. Nmap devolvió:\n{resultado.stderr}")
+              if not os.path.exists(temp_xml) or os.path.getsize(temp_xml) == 0:
                   return encontrados
 
               try:
                   tree = ET.parse(temp_xml)
                   root = tree.getroot()
                   for host in root.findall('host'):
-                      # Verificar si el puerto 22 está abierto
-                      port_open = False
-                      ports = host.find('ports')
-                      if ports is not None:
-                          for port in ports.findall('port'):
-                              if port.get('portid') == '22':
-                                  state = port.find('state')
-                                  if state is not None and state.get('state') == 'open':
-                                      port_open = True
-                                      break
-                      
-                      if not port_open:
-                          continue
-
-                      # Si el puerto está abierto, extraemos la info
                       ip = ""
-                      mac = "Oculta tras el Router (Capa 3)"
+                      mac = "Oculta (Capa 3 / Remota)"
                       hostname = "Sin DNS"
                       
                       # Buscar IP y MAC
@@ -111,13 +72,13 @@
                       # Buscar Hostname
                       hostnames = host.find('hostnames')
                       if hostnames is not None:
-                          hostname_elem = hostnames.find('hostname')
-                          if hostname_elem is not None and hostname_elem.get('name'):
-                              hostname = hostname_elem.get('name')
+                          h_elem = hostnames.find('hostname')
+                          if h_elem is not None:
+                              hostname = h_elem.get('name')
                       
                       encontrados.append([obtener_rango(ip), hostname, ip, mac])
-              except ET.ParseError as e:
-                  print(f"Error al parsear XML de nmap para la red {red}: {e}")
+              except Exception as e:
+                  print(f"Error procesando {red}: {e}")
               finally:
                   if os.path.exists(temp_xml):
                       os.remove(temp_xml)
@@ -127,24 +88,31 @@
           def run():
               redes = {{ redes_a_escanear | to_json }}
               excel_path = "{{ ruta_excel }}"
-
               todos_los_hosts = []
+              
               for red in redes:
                   todos_los_hosts.extend(escanear_red(red))
+
+              if not todos_los_hosts:
+                  print("No se encontraron hosts con el puerto 22 abierto.")
+                  # Crear un excel vacío para evitar errores en tareas posteriores
+                  todos_los_hosts = [["N/A", "No se detectaron hosts", "N/A", "N/A"]]
 
               wb = Workbook()
               ws = wb.active
               ws.title = "Inventario SSH"
-
-              # Estilo de cabecera
               ws.append(["RANGO", "HOSTNAME", "IP", "MAC"])
+              
               header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
               for cell in ws[1]:
                   cell.font = Font(bold=True, color="FFFFFF")
                   cell.fill = header_fill
 
-              # Ordenar por rango y luego por el último octeto de la IP
-              todos_los_hosts.sort(key=lambda x: (x[0], int(x[2].split('.')[-1]) if '.' in x[2] else 0))
+              # Ordenar por el último octeto de la IP de forma segura
+              try:
+                  todos_los_hosts.sort(key=lambda x: (x[0], int(x[2].split('.')[-1]) if '.' in x[2] and x[2][0].isdigit() else 0))
+              except:
+                  pass
 
               for row in todos_los_hosts:
                   ws.append(row)
@@ -155,15 +123,20 @@
               ws.column_dimensions['D'].width = 20
 
               wb.save(excel_path)
-              print(f"Proceso finalizado. Total hosts: {len(todos_los_hosts)}")
+              print(f"Excel guardado en {excel_path}. Total: {len(todos_los_hosts)}")
 
           if __name__ == "__main__":
               run()
 
-    - name: Ejecutar Motor de Descubrimiento (Esto puede tardar unos minutos)
+    - name: Ejecutar Motor de Descubrimiento
       ansible.builtin.command: "python3 {{ script_python }}"
-      async: 1800  # Hasta 30 minutos de tiempo límite
-      poll: 15
+      async: 2400
+      poll: 10
+      register: salida_motor
+
+    - name: Mostrar resultado del script
+      ansible.builtin.debug:
+        var: salida_motor.stdout_lines
 
     - name: Copiar Reporte a la Ruta de Red
       ansible.builtin.copy:
