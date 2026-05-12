@@ -33,97 +33,70 @@
           from openpyxl import Workbook
           from openpyxl.styles import Font, PatternFill
 
-          def obtener_rango(ip):
-              partes = ip.split('.')
-              return f"Rango {partes[0]}.{partes[1]}.{partes[2]}.x" if len(partes) == 4 else "IP Inválida"
-
           def escanear_red(red):
-              print(f"Escaneando {red}...")
-              # Usamos un nombre de archivo temporal basado en la red para evitar colisiones
+              print(f"\n>>> PROCESANDO: {red}")
               fd, temp_xml = tempfile.mkstemp(suffix=".xml")
               os.close(fd)
               
-              # T4 y min-parallelism 20 para acelerar sin perder fiabilidad
-              cmd = f"nmap -sT -Pn -p 22 --open -T4 --min-parallelism 20 {red} -oX {temp_xml}"
-              resultado = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-              encontrados = []
+              # -n: No DNS (rápido), -Pn: No ping, --open: Solo abiertos, -T4: Agresivo
+              cmd = f"nmap -sT -Pn -p 22 --open -n -T4 --max-parallelism 100 {red} -oX {temp_xml}"
               
-              if not os.path.exists(temp_xml) or os.path.getsize(temp_xml) == 0:
-                  return encontrados
-
+              encontrados = []
               try:
+                  # Timeout de 10 min por red para que no bloquee el playbook
+                  subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+                  
+                  if not os.path.exists(temp_xml) or os.path.getsize(temp_xml) == 0:
+                      print(f"--- Sin respuesta en {red}")
+                      return encontrados
+
                   tree = ET.parse(temp_xml)
                   root = tree.getroot()
                   for host in root.findall('host'):
-                      ip = ""
-                      mac = "Oculta (Capa 3 / Remota)"
-                      hostname = "Sin DNS"
+                      ip = "Desconocida"
+                      for addr in host.findall('address'):
+                          if addr.get('addrtype') == 'ipv4':
+                              ip = addr.get('addr')
                       
-                      # Buscar IP y MAC
-                      for address in host.findall('address'):
-                          if address.get('addrtype') == 'ipv4':
-                              ip = address.get('addr')
-                          elif address.get('addrtype') == 'mac':
-                              mac = address.get('addr')
-
-                      if not ip:
-                          continue
-
-                      # Buscar Hostname
-                      hostnames = host.find('hostnames')
-                      if hostnames is not None:
-                          h_elem = hostnames.find('hostname')
-                          if h_elem is not None:
-                              hostname = h_elem.get('name')
-                      
-                      encontrados.append([obtener_rango(ip), hostname, ip, mac])
+                      if ip != "Desconocida":
+                          encontrados.append([f"Rango {red}", "N/A (No DNS)", ip, "Detectado"])
+                  
+                  print(f"--- Finalizado {red}. Hosts detectados: {len(encontrados)}")
               except Exception as e:
-                  print(f"Error procesando {red}: {e}")
+                  print(f"!!! Error en {red}: {e}")
               finally:
                   if os.path.exists(temp_xml):
                       os.remove(temp_xml)
-
               return encontrados
 
           def run():
-              redes = {{ redes_a_escanear | to_json }}
-              excel_path = "{{ ruta_excel }}"
-              todos_los_hosts = []
+              # Cargamos las redes que vienen de Ansible
+              try:
+                  redes = json.loads('{{ redes_a_escanear | to_json }}')
+              except:
+                  print("Error cargando la lista de redes")
+                  return
+
+              print(f"Iniciando escaneo de {len(redes)} redes...")
+              resultados_totales = []
               
-              for red in redes:
-                  todos_los_hosts.extend(escanear_red(red))
+              for r in redes:
+                  resultados_totales.extend(escanear_red(r))
 
-              if not todos_los_hosts:
-                  print("No se encontraron hosts con el puerto 22 abierto.")
-                  # Crear un excel vacío para evitar errores en tareas posteriores
-                  todos_los_hosts = [["N/A", "No se detectaron hosts", "N/A", "N/A"]]
-
+              # Crear Excel
               wb = Workbook()
               ws = wb.active
-              ws.title = "Inventario SSH"
-              ws.append(["RANGO", "HOSTNAME", "IP", "MAC"])
+              ws.title = "Inventario"
+              ws.append(["RANGO", "HOSTNAME", "IP", "ESTADO"])
               
-              header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-              for cell in ws[1]:
-                  cell.font = Font(bold=True, color="FFFFFF")
-                  cell.fill = header_fill
+              if resultados_totales:
+                  for fila in resultados_totales:
+                      ws.append(fila)
+              else:
+                  ws.append(["N/A", "N/A", "No se encontró nada", "Vacio"])
 
-              # Ordenar por el último octeto de la IP de forma segura
-              try:
-                  todos_los_hosts.sort(key=lambda x: (x[0], int(x[2].split('.')[-1]) if '.' in x[2] and x[2][0].isdigit() else 0))
-              except:
-                  pass
-
-              for row in todos_los_hosts:
-                  ws.append(row)
-
-              ws.column_dimensions['A'].width = 25
-              ws.column_dimensions['B'].width = 35
-              ws.column_dimensions['C'].width = 20
-              ws.column_dimensions['D'].width = 20
-
-              wb.save(excel_path)
-              print(f"Excel guardado en {excel_path}. Total: {len(todos_los_hosts)}")
+              wb.save("{{ ruta_excel }}")
+              print(f"PROCESO FINALIZADO. Total hosts en Excel: {len(resultados_totales)}")
 
           if __name__ == "__main__":
               run()
