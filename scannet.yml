@@ -7,7 +7,6 @@
   vars:
     # Agrega aquí todas las redes que necesites
     redes_a_escanear:
-      - "10.49.1.0/24"
       - "10.49.3.0/24"
       - "10.57.3.0/24"
       - "10.57.1.0/24"
